@@ -111,15 +111,45 @@ index 0000000..8136739
 +    return result;
 +  })());
 +});
+diff --git a/integrations/design-studio/figma-import-worker.js b/integrations/design-studio/figma-import-worker.js
+new file mode 100644
+index 0000000..7a01b1c
+--- /dev/null
++++ b/integrations/design-studio/figma-import-worker.js
+@@ -0,0 +1,22 @@
++import initialize, { FigmaTempWriter } from './runtime/op_host_web.js';
++
++self.onmessage = async ({ data: { file, maxDocumentBytes } }) => {
++  let writer;
++  try {
++    await initialize();
++    writer = new FigmaTempWriter(new Uint8Array(await file.arrayBuffer()), file.name);
++    if (!writer.page_count()) throw new Error('文件中没有可导入的设计页面');
++    const source = writer.full_document_json();
++    const warnings = JSON.parse(writer.warnings_json());
++    if (new Blob([source]).size > maxDocumentBytes) {
++      throw new Error(`转换后的设计超过 ${maxDocumentBytes / (1024 * 1024)} MiB，请在 Figma 中拆分后再导入`);
++    }
++    const design = JSON.parse(source);
++    design.editorMeta = { ...design.editorMeta, preserveAuthoredGeometry: true };
++    self.postMessage({ document: JSON.stringify(design), warnings });
++  } catch (error) {
++    self.postMessage({ error: error instanceof Error ? error.message : String(error) });
++  } finally {
++    writer?.free();
++  }
++};
 diff --git a/integrations/design-studio/index.html b/integrations/design-studio/index.html
 new file mode 100644
-index 0000000..6e037c6
+index 0000000..8b50883
 --- /dev/null
 +++ b/integrations/design-studio/index.html
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,11 @@
 +<!doctype html>
 +<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>设计工作台 · DSH</title><link rel="stylesheet" href="./studio.css"></head>
-+<body><header><strong>设计工作台</strong><label>项目<select id="project" aria-label="业务项目"></select></label><label>设计稿<select id="draft" aria-label="选择设计稿"></select></label><button id="new">新建</button><a id="home" href="/">返回 DSH</a></header>
++<body><header><strong>设计工作台</strong><label>项目<select id="project" aria-label="业务项目"></select></label><label>设计稿<select id="draft" aria-label="选择设计稿"></select></label><button id="new">新建</button>
++<button id="import-figma" type="button" disabled>导入 Figma</button><input id="figma-file" type="file" accept=".fig" aria-label="选择 Figma 设计文件" hidden>
++<a id="home" href="/">返回 DSH</a></header>
 +<main><section id="canvas-area" aria-label="设计画布"><p id="empty" role="status">正在读取项目…</p></section>
 +<aside><h1>设计交付</h1><label>设计名称<input id="title" maxlength="100" disabled></label><label>目标页面与交互说明<textarea id="brief" rows="5" maxlength="4000" placeholder="例如：设备列表 /devices，支持按状态筛选" disabled></textarea></label>
 +<div class="row"><button id="save" disabled>保存草稿</button><button id="export" disabled>导出 .op</button></div>
@@ -196,10 +226,10 @@ index 0000000..9bb20eb
 +@media(max-width:760px){header{gap:6px;padding:6px}header strong{display:none}main{flex-direction:column}#canvas-area{min-height:230px}aside{width:auto;max-height:34dvh;overflow:auto;border:0;border-top:1px solid var(--line);padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px}aside h1{display:none}aside textarea{height:44px}aside small,aside #status,aside #history{grid-column:1/-1}}
 diff --git a/integrations/design-studio/studio.js b/integrations/design-studio/studio.js
 new file mode 100644
-index 0000000..1904d88
+index 0000000..554e7ee
 --- /dev/null
 +++ b/integrations/design-studio/studio.js
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,253 @@
 +const control = Object.fromEntries(Array.from(document.querySelectorAll('[id]'), element => [element.id, element]));
 +const api = async (action, values = {}) => {
 +  const response = await fetch('/api/task-board/design', { method: 'POST', credentials: 'same-origin',
@@ -214,6 +244,7 @@ index 0000000..1904d88
 +let opened = false;
 +let ready = false;
 +let writable = false;
++let maxDocumentBytes;
 +let switching = false;
 +let working = false;
 +let dirty = 0;
@@ -235,6 +266,8 @@ index 0000000..1904d88
 +  control.save.disabled = control.deliver.disabled = !enabled;
 +  control.export.disabled = !ready || switching || working;
 +  control.new.disabled = !writable || !workspace || switching || working;
++  control['import-figma'].disabled = control.new.disabled;
++  control['canvas-area'].inert = switching;
 +  control.project.disabled = switching || working || !control.project.options.length;
 +  control.draft.disabled = switching || working || !control.draft.options.length;
 +  control.title.disabled = control.brief.disabled = !writable || !draft || switching;
@@ -384,7 +417,50 @@ index 0000000..1904d88
 +  } catch (err) { control.project.value = workspace; control.draft.value = draft?.id || ''; say(err.message, true); }
 +  finally { switching = false; controls(); }
 +}
++async function convertFigma(file) {
++  const worker = new Worker(new URL('./figma-import-worker.js', import.meta.url), { type: 'module' });
++  let deadline;
++  try {
++    return await new Promise((resolve, reject) => {
++      deadline = setTimeout(() => reject(new Error('转换超时，请拆分文件后重试')), 600_000);
++      worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data);
++      worker.onerror = worker.onmessageerror = () => reject(new Error('无法加载 Figma 转换器，请刷新后重试'));
++      worker.postMessage({ file, maxDocumentBytes });
++    });
++  } finally {
++    clearTimeout(deadline);
++    worker.terminate();
++  }
++}
++
 +control.new.onclick = () => choose(workspace, null, true);
++control['import-figma'].onclick = () => control['figma-file'].click();
++control['figma-file'].onchange = async event => {
++  const input = event.currentTarget;
++  const file = input.files[0];
++  input.value = '';
++  if (!file || control['import-figma'].disabled) return;
++  if (!/\.fig$/i.test(file.name)) { say('请选择 Figma Design 的 .fig 文件', true); return; }
++  switching = true;
++  controls();
++  try {
++    await leaveDraft();
++    say(`正在导入 ${file.name}…`);
++    const converted = await convertFigma(file);
++    const id = crypto.randomUUID();
++    const title = file.name.slice(0, -4).trim().slice(0, 100) || 'Figma 设计';
++    const result = await api('import', { workspace, id, title, document: converted.document });
++    control.draft.add(new Option(result.draft.title, id), 0);
++    mount(result);
++    const warnings = converted.warnings;
++    say(warnings.length ? `已导入为新草稿。${warnings.length} 条转换提示，首条为 ${warnings[0]}` : '已导入为新草稿');
++  } catch (error) {
++    say(`导入失败。${error.message}`, true);
++  } finally {
++    switching = false;
++    controls();
++  }
++};
 +control.project.onchange = () => choose(control.project.value);
 +control.draft.onchange = () => choose(workspace, control.draft.value);
 +control.save.onclick = () => enqueue('save').catch(() => {});
@@ -401,6 +477,7 @@ index 0000000..1904d88
 +  controls();
 +  const result = await api('projects');
 +  writable = result.writable;
++  maxDocumentBytes = result.maxDocumentBytes;
 +  control.project.replaceChildren(...result.projects.map(project => new Option(project.title, project.id)));
 +  const initial = new URLSearchParams(location.search).get('workspace');
 +  if (result.projects.length) await choose(result.projects.find(project => project.id === initial)?.id || result.projects[0].id);

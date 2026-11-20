@@ -1,31 +1,31 @@
 diff --git a/npm-shrinkwrap.json b/npm-shrinkwrap.json
-index aec1f42..5b63613 100644
+index aec1f42..c94caf5 100644
 --- a/npm-shrinkwrap.json
 +++ b/npm-shrinkwrap.json
 @@ -1,12 +1,12 @@
  {
    "name": "dsh-passwords",
 -  "version": "2.7.8-dsh.20261118.2",
-+  "version": "2.7.8-dsh.20261119.1",
++  "version": "2.7.8-dsh.20261119.2",
    "lockfileVersion": 3,
    "requires": true,
    "packages": {
      "": {
        "name": "dsh-passwords",
 -      "version": "2.7.8-dsh.20261118.2",
-+      "version": "2.7.8-dsh.20261119.1",
++      "version": "2.7.8-dsh.20261119.2",
        "license": "BSD-3-Clause",
        "dependencies": {
          "bcryptjs": "^3.0.2",
 diff --git a/package.json b/package.json
-index 51be776..9d1385e 100644
+index 51be776..6218b51 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,6 +1,6 @@
  {
    "name": "dsh-passwords",
 -  "version": "2.7.8-dsh.20261118.2",
-+  "version": "2.7.8-dsh.20261119.1",
++  "version": "2.7.8-dsh.20261119.2",
    "description": "dsh-passwords: a server-grade gateway that turns DeepSeek Harness into a multi-tenant platform — remote access + automatic HTTPS, per-subuser permissions & quotas, sandbox enforcement, first-run setup, SQLite/MySQL auth with at-rest encryption, rate-limit and audit log (bilingual zh/en UI)",
    "type": "module",
    "main": "dist/index.js",
@@ -208,10 +208,10 @@ index 0000000..53d60b7
 +stage('@zseven-w/dsh-openpencil@0.1.0-rc.15', '34e8923314476658b4dd9d893088d4b1954cefd6a7f6bc4fdcc5b83a8a854ae0c26c7bf0ce841027ae0178d3e0d20628681314e691ad43d1d58148d1bd2ac3e1', process.env.DSH_OPENPENCIL_VIEWER_ARCHIVE, 'package/lib/viewer-assets', path.join(dest, 'viewer'));
 diff --git a/src/design-studio.ts b/src/design-studio.ts
 new file mode 100644
-index 0000000..a21f34b
+index 0000000..ae018f5
 --- /dev/null
 +++ b/src/design-studio.ts
-@@ -0,0 +1,218 @@
+@@ -0,0 +1,226 @@
 +import { createHash, randomUUID } from 'node:crypto';
 +import { constants, closeSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 +import path from 'node:path';
@@ -345,7 +345,7 @@ index 0000000..a21f34b
 +
 +  async action(principal: AuthenticatedPrincipal, input: Fields): Promise<unknown> {
 +    const access = await this.access(principal, input.action === 'deliver');
-+    if (input.action === 'projects') return { projects: access.projects.map(({ id, title }) => ({ id, title })), writable: access.writable };
++    if (input.action === 'projects') return { projects: access.projects.map(({ id, title }) => ({ id, title })), writable: access.writable, maxDocumentBytes: designLimit };
 +    const project = access.projects.find(row => row.id === input.workspace);
 +    if (!project) throw new DesignError(403, '没有此工作区的访问权限');
 +    const store = this.database();
@@ -360,9 +360,17 @@ index 0000000..a21f34b
 +    const id = text(input.id, 64, '设计稿编号');
 +    if (!/^[a-f0-9]{8}-[a-f0-9-]{27}$/.test(id)) return invalid('设计稿编号无效');
 +    const key = [...scope, id];
-+    if (input.action === 'new') {
++    const importing = input.action === 'import';
++    if (input.action === 'new' || importing) {
 +      if (!access.writable) throw new DesignError(403, '此账号没有项目写入权限');
-+      store.prepare('INSERT OR IGNORE INTO drafts VALUES(?,?,?,? ,?,?,1)').run(...key, '未命名设计', '', blank);
++      const title = importing ? text(input.title, 100, '设计名称') : '未命名设计';
++      if (!title) return invalid('请输入设计名称');
++      const document = importing ? documentText(input.document) : blank;
++      const inserted = store.prepare('INSERT OR IGNORE INTO drafts VALUES(?,?,?,?,?,?,1)').run(...key, title, '', document);
++      if (importing && !inserted.changes) {
++        const same = store.prepare('SELECT 1 FROM drafts WHERE owner=? AND workspace=? AND id=? AND title=? AND document=?').get(...key, title, document);
++        if (!same) throw new DesignError(409, '同一编号已有其他设计稿，请重新导入');
++      }
 +    }
 +    const read = () => store.prepare('SELECT id,title,brief,document,revision FROM drafts WHERE owner=? AND workspace=? AND id=?').get(...key) as unknown as Draft | undefined;
 +    const draft = read();
@@ -375,7 +383,7 @@ index 0000000..a21f34b
 +        return { ...row, status: card?.status, sessionId: execution?.sessionId, result: execution?.summary ?? execution?.error };
 +      });
 +    };
-+    if (input.action === 'open' || input.action === 'new') return { draft, deliveries: history() };
++    if (input.action === 'open' || input.action === 'new' || importing) return { draft, deliveries: history() };
 +    if (input.action === 'history') return { deliveries: history() };
 +    if (!access.writable) throw new DesignError(403, '此账号没有项目写入权限');
 +    if (input.action !== 'save' && input.action !== 'deliver') return invalid('未知操作');
@@ -432,10 +440,10 @@ index 0000000..a21f34b
 +}
 diff --git a/test/design-studio.test.ts b/test/design-studio.test.ts
 new file mode 100644
-index 0000000..a9d32d2
+index 0000000..bbd06a2
 --- /dev/null
 +++ b/test/design-studio.test.ts
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,89 @@
 +import { test } from 'node:test';
 +import assert from 'node:assert/strict';
 +import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
@@ -443,6 +451,7 @@ index 0000000..a9d32d2
 +import path from 'node:path';
 +import { randomUUID } from 'node:crypto';
 +import { DesignStudio, type DesignBoard } from '../src/design-studio.js';
++import type { AuthenticatedPrincipal } from '../src/principal.js';
 +import { HostTaskLedger, TaskBoardHostService } from '../dist/task-board-engine.js';
 +
 +test('drawing revisions are scoped, immutable on handoff, and start one writable board execution per revision', async t => {
@@ -494,4 +503,33 @@ index 0000000..a9d32d2
 +  const reopened = await call('open');
 +  assert.equal(reopened.draft.document, input.document);
 +  assert.equal(reopened.deliveries.length, 1);
++});
++
++test('imports create one editable private draft and wait for explicit delivery', async t => {
++  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'dsh-figma-test-')));
++  const project = { id: 'figma-test', title: '设计', path: root };
++  const owner = { id: '1', role: 'user', username: 'designer', source: 'dsh-passwords' } as const;
++  const viewer = { ...owner, id: '2' };
++  const board: DesignBoard = { snapshot: () => ({ tasks: [] }), apply: () => assert.fail('unexpected task') };
++  const studio = new DesignStudio(root, async actor => ({ board, projects: [project], writable: actor.id === owner.id }));
++  t.after(() => { studio.close(); rmSync(root, { recursive: true, force: true }); });
++  const call = (action: string, args = {}, actor: AuthenticatedPrincipal = owner) =>
++    studio.action(actor, { workspace: project.id, action, ...args }) as Promise<{ draft: { title: string; document: string; revision: number }; drafts: { id: string }[] }>;
++  const id = randomUUID();
++  const document = JSON.stringify({ version: '1.0.0', pages: [{ name: '首页', children: [{ id: 'logo', type: 'rectangle' }] }] });
++  const input = { id, title: '商户端', document };
++  const existingId = randomUUID();
++  const existing = await call('new', { id: existingId });
++  await assert.rejects(call('import', input, viewer), /写入权限/);
++  await assert.rejects(call('import', { ...input, document: 'invalid' }), /有效的 JSON/);
++  assert.deepEqual((await call('list')).drafts.map(draft => draft.id), [existingId]);
++  const imported = await call('import', input);
++  assert.equal(imported.draft.revision, 1);
++  assert.equal(imported.draft.document, document);
++  assert.deepEqual((await call('import', input)).draft, imported.draft);
++  await assert.rejects(call('import', { ...input, id: existingId }), /已有其他设计稿/);
++  assert.deepEqual((await call('open', { id: existingId })).draft, existing.draft);
++  await assert.rejects(call('open', { id }, viewer), /没有找到设计稿/);
++  await call('save', { ...input, title: '商户端第二稿', brief: '', revision: imported.draft.revision });
++  assert.equal((await call('open', { id })).draft.title, '商户端第二稿');
 +});

@@ -4,6 +4,14 @@
 
 交付记录中的 **手机预览** 和 **复制预览链接** 指向当时定稿的版本。手机浏览器打开链接并登录 DSH 后，有项目访问权限的成员可以换页、缩放和拖动画布。验证开发后的页面交互时，使用业务项目运行后提供的预览地址。
 
+## 导入 Figma
+
+1. 在 Figma Design 菜单选择 **File → Save local copy**，保存 `.fig` 文件。
+2. 在 DSH **设计工作台**选择业务项目，点击 **导入 Figma**，选择该文件。
+3. 在 OpenPencil 画布检查并编辑新草稿。填写目标页面和交互说明，点击 **定稿并开发**启动任务。
+
+导入入口接收本地 `.fig` 文件。浏览器完成转换后，DSH 将可编辑的 `.op` 草稿保存到所选项目名下。转换后的设计稿上限为 16 MiB。大型设计可以拆成多个 `.fig` 文件导入。
+
 ## 接入 DSH
 
 补丁以 `dsh-passwords` 的 `8924a8e90999845d75717b5cd60d361d10614d53` 为基线，适用于 DeepSeek Harness `0.2.2-rc.4` 环境。使用 Node.js `22.19` 及以上的 22.x 版本，或 Node.js `24` 及以上版本。在 DSH 插件的干净工作区应用补丁。
@@ -17,6 +25,6 @@ npm ci
 npm pack
 ```
 
-打包会校验并嵌入固定版本的 OpenPencil `0.1.0-rc.15` 浏览器编辑器和查看器。构建产物为 `dsh-passwords-2.7.8-dsh.20261119.1.tgz`。
+打包会校验并嵌入固定版本的 OpenPencil `0.1.0-rc.15` 浏览器编辑器、查看器和 Figma 转换模块。构建产物为 `dsh-passwords-2.7.8-dsh.20261119.2.tgz`。
 
 使用该包更新账号网关和 Harness Web Profile 中的 `dsh-passwords`。启用 `MCP_TENANT_TASK_BOARD=true`，让 `MCP_MANAGED_WORKSPACE_ROOT` 与项目工作区位于同一数据盘。美工账号需要目标项目的访问和写入权限。编辑器需要 HTTPS，手机需要能够访问同一个 DSH 网关。
