@@ -250,7 +250,7 @@ index 0000000..c392a4a
 +  background: #1f2023;
 +  color: #f4f4f4;
 +}
-+body { margin: 0; }
++body { margin: 0; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 +[hidden] { display: none !important; }
 +#screen {
 +  position: fixed;
