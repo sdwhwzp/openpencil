@@ -30,7 +30,10 @@ fn fixed_navigation_and_hit_regions_keep_their_positions_during_scroll_and_retur
     let before = session.preview_scene_for_test();
     assert!(session.scroll_prototype(190.0, 500.0, 0.0, 300.0));
     let after = session.preview_scene_for_test();
-    assert_eq!(find(&after, "tabbar").bounds, find(&before, "tabbar").bounds);
+    assert_eq!(
+        find(&after, "tabbar").bounds,
+        find(&before, "tabbar").bounds
+    );
     assert_eq!(find(&after, "order").bounds.origin.y, 520.0);
     assert!(session.prototype_hotspot_at(160.0, 550.0));
     session.dispatch_tap(160.0, 550.0);
@@ -103,4 +106,40 @@ fn nested_horizontal_scroll_keeps_its_clip_and_leaves_the_outer_page_still() {
         assert_eq!(find(&scrolled, "lane").bounds.origin.y, 200.0);
         assert_eq!(find(&scrolled, "label").bounds.origin.y, 200.0);
     }
+}
+
+#[test]
+fn long_frame_with_no_explicit_overflow_keeps_its_layered_footer_in_the_viewport() {
+    let source = r#"{
+        "version":"1.1","children":[
+            {"type":"frame","id":"screen","screen":"/","width":390,"height":1751.5,"children":[
+                {"type":"rectangle","id":"body","y":100,"width":390,"height":1550},
+                {"type":"rectangle","id":"header","pin":true,"width":390,"height":88},
+                {"type":"rectangle","id":"floating-button","pin":true,"x":320,"y":640,"width":50,"height":55},
+                {"type":"frame","id":"tabs","pin":true,"y":1673.5,"width":390,"height":38,
+                 "events":{"onTap":[{"push":"\"/next\""}]}},
+                {"type":"rectangle","id":"footer","pin":true,"y":1667.5,"width":390,"height":50},
+                {"type":"rectangle","id":"home-indicator","pin":true,"y":1717.5,"width":390,"height":34}
+            ]},
+            {"type":"frame","id":"next","screen":"/next","width":390,"height":844}
+        ]
+    }"#;
+    let document = jian_ops_schema::load_str(source).unwrap().value;
+    let mut session = enter(&document);
+    session.enable_prototype_viewport();
+    assert!(!session.prototype_has_authored_viewport());
+    session.set_prototype_viewport_height(844.0);
+    assert!(session.scroll_prototype(190.0, 520.0, 0.0, 210.0));
+    let scene = session.preview_scene_for_test();
+    assert_eq!(find(&scene, "header").bounds.origin.y, 0.0);
+    assert_eq!(find(&scene, "floating-button").bounds.origin.y, 640.0);
+    assert_eq!(find(&scene, "body").bounds.origin.y, -110.0);
+    assert_eq!(find(&scene, "footer").bounds.origin.y, 760.0);
+    assert_eq!(find(&scene, "tabs").bounds.origin.y, 766.0);
+    assert_eq!(find(&scene, "home-indicator").bounds.origin.y, 810.0);
+    assert!(session.prototype_hotspot_at(160.0, 780.0));
+    session.dispatch_tap(160.0, 780.0);
+    session.pump(800);
+    session.reconcile(800);
+    assert_eq!(session.current_path_for_test(), "/next");
 }

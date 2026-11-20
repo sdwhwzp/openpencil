@@ -64,6 +64,7 @@ fn visible(source: &FigValue) -> bool {
 
 fn scroll_direction(source: &FigValue) -> Option<&'static str> {
     match source.get_str("scrollDirection") {
+        Some("NONE") => Some("none"),
         Some("VERTICAL") => Some("vertical"),
         Some("HORIZONTAL") => Some("horizontal"),
         Some("BOTH") => Some("both"),
@@ -96,7 +97,7 @@ fn collect_destinations(
     if !visible(&node.figma) {
         return false;
     }
-    let mut linked = scroll_direction(&node.figma).is_some();
+    let mut linked = scroll_direction(&node.figma).is_some_and(|direction| direction != "none");
     for action in click_actions(&node.figma) {
         match action {
             Click::Navigate(target) if screens.contains(target.as_str()) => {
@@ -136,12 +137,13 @@ impl PrototypeImport {
                         .unwrap_or("");
                     let name = point
                         .and_then(|value| value.get_str("name"))
+                        .filter(|name| !name.trim().is_empty())
                         .or_else(|| frame.figma.get_str("name"))
                         .unwrap_or("Flow");
                     Some((position, id.clone(), name.to_owned()))
                 })
                 .collect::<Vec<_>>();
-            page_starts.sort_by_key(|(position, _, _)| *position);
+            page_starts.sort_by_key(|(position, _, _)| (position.is_empty(), *position));
             starts.extend(page_starts);
         }
         let screens: HashSet<_> = frames.iter().map(|(_, id)| id.as_str()).collect();
@@ -199,7 +201,7 @@ impl PrototypeImport {
         let id = node_id(source);
         let path = id.as_ref().and_then(|id| self.paths.get(id));
         let flow = id.as_ref().and_then(|id| self.flows.get(id));
-        let overflow = scroll_direction(source).or_else(|| path.map(|_| "none"));
+        let overflow = scroll_direction(source);
         let position = source.get_str("scrollBehavior");
         let fixed = position == Some("FIXED_WHEN_CHILD_OF_SCROLLING_FRAME");
         let sticky = position == Some("STICKY_SCROLLS");
@@ -240,5 +242,61 @@ impl PrototypeImport {
                 extra.insert("prototypeSticky".to_owned(), Value::Bool(true));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flow_frame(id: u32, title: &str, name: &str, position: &str) -> TreeNode {
+        let guid = FigValue::Object(vec![
+            ("sessionID".into(), FigValue::Uint(0)),
+            ("localID".into(), FigValue::Uint(id)),
+        ]);
+        let flow = FigValue::Object(vec![
+            ("name".into(), FigValue::Str(name.into())),
+            ("position".into(), FigValue::Str(position.into())),
+        ]);
+        TreeNode {
+            figma: FigValue::Object(vec![
+                ("type".into(), FigValue::Str("FRAME".into())),
+                ("guid".into(), guid),
+                ("name".into(), FigValue::Str(title.into())),
+                ("prototypeStartingPoint".into(), flow),
+            ]),
+            children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn positioned_flow_opens_first_and_unnamed_flows_use_the_frame_title() {
+        let page = TreeNode {
+            figma: FigValue::Null,
+            children: vec![
+                flow_frame(1, "New work order", "", ""),
+                flow_frame(2, "Home", "Flow 1", "!"),
+            ],
+        };
+        let prototype = PrototypeImport::from_pages(&[&page]);
+        assert_eq!(prototype.paths["0:2"], "/");
+        assert_eq!(prototype.paths["0:1"], "/figma/0-1");
+        assert_eq!(prototype.flows["0:1"], "New work order");
+
+        let mut screen = jian_ops_schema::load_str(
+            r#"{"version":"1.1","children":[{"type":"frame","id":"home","width":780,"height":3503}]}"#,
+        )
+        .unwrap()
+        .value
+        .children
+        .remove(0);
+        prototype.apply(&page.children[1].figma, &mut screen);
+        let PenNode::Frame(screen) = screen else {
+            panic!("expected the imported screen frame");
+        };
+        assert_eq!(screen.screen.as_deref(), Some("/"));
+        let metadata = &screen.gestures.unwrap().extra;
+        assert_eq!(metadata["prototypeFlow"], "Flow 1");
+        assert!(!metadata.contains_key("prototypeOverflow"));
     }
 }

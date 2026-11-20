@@ -24,7 +24,7 @@
 2. 在 DSH **设计工作台**选择前端工作区，点击 **导入 Figma**，选择该文件。
 3. 在 OpenPencil 画布检查并编辑新草稿。填写目标页面和交互说明，点击 **定稿并开发**启动任务。
 
-导入入口接收本地 `.fig` 文件。浏览器完成转换后，DSH 将可编辑的 `.op` 草稿保存到所选项目名下。原型转换支持流程起始页、点击跳转、返回、滚动方向、固定和吸顶图层。Figma 浮层、条件交互和自定义转场尚待支持。转换后的设计稿上限为 16 MiB。
+导入入口接收本地 `.fig` 文件。浏览器完成转换后，DSH 将可编辑的 `.op` 草稿保存到所选项目名下。原型转换支持流程起始页、点击跳转、返回、滚动方向、固定和吸顶图层。长画板省略滚动方向时，手机播放器按屏幕宽度呈现并允许纵向滚动，贴底的多层固定导航栏随手机视口定位。Figma 浮层、条件交互和自定义转场尚待支持。转换后的设计稿上限为 16 MiB。
 
 ## 接入 DSH
 
@@ -51,7 +51,7 @@ npm ci
 DSH_OPENPENCIL_WEB_BUNDLE="$OPENPENCIL_BUNDLE" npm pack
 ```
 
-构建产物为 `dsh-passwords-2.7.8-dsh.20261119.5.tgz`。包内包含 OpenPencil 网页编辑器、Figma 转换模块及定稿播放器。
+构建产物为 `dsh-passwords-2.7.8-dsh.20261119.6.tgz`。包内包含 OpenPencil 网页编辑器、Figma 转换模块及定稿播放器。
 
 使用该包更新账号网关和 Harness Web Profile 中的 `dsh-passwords`。在 Web Profile 服务环境中将 `DSH_OPENPENCIL_EDITOR_BIN` 指向同一提交构建的 `op-host-web-server` 绝对路径，启用 `MCP_TENANT_TASK_BOARD=true`，并将 `MCP_MANAGED_WORKSPACE_ROOT` 指向前端工作区所在的数据盘。在 30 号机上，构建、候选包和验证目录使用 `/srv/dsh-data`。
 

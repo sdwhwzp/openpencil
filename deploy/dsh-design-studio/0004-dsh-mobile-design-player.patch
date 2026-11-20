@@ -645,14 +645,14 @@ index 02974b2..95c9ce2 100644
  {
    "name": "dsh-passwords",
 -  "version": "2.7.8-dsh.20261119.3",
-+  "version": "2.7.8-dsh.20261119.5",
++  "version": "2.7.8-dsh.20261119.6",
    "lockfileVersion": 3,
    "requires": true,
    "packages": {
      "": {
        "name": "dsh-passwords",
 -      "version": "2.7.8-dsh.20261119.3",
-+      "version": "2.7.8-dsh.20261119.5",
++      "version": "2.7.8-dsh.20261119.6",
        "license": "BSD-3-Clause",
        "dependencies": {
          "bcryptjs": "^3.0.2",
@@ -664,7 +664,7 @@ index 04f68e8..9ae0fc4 100644
  {
    "name": "dsh-passwords",
 -  "version": "2.7.8-dsh.20261119.3",
-+  "version": "2.7.8-dsh.20261119.5",
++  "version": "2.7.8-dsh.20261119.6",
    "description": "dsh-passwords: a server-grade gateway that turns DeepSeek Harness into a multi-tenant platform — remote access + automatic HTTPS, per-subuser permissions & quotas, sandbox enforcement, first-run setup, SQLite/MySQL auth with at-rest encryption, rate-limit and audit log (bilingual zh/en UI)",
    "type": "module",
    "main": "dist/index.js",

@@ -175,6 +175,29 @@ impl PrototypeViewport {
         self.pinned.contains(&child.id) || self.bottom_bar.as_ref() == Some(&child.id)
     }
 
+    fn pinned_footer_top(&self, root: &SceneNode) -> f32 {
+        let bottom = root.bounds.origin.y + root.bounds.size.y;
+        let center = root.bounds.origin.y + root.bounds.size.y / 2.0;
+        let mut layers = root
+            .children
+            .iter()
+            .filter(|child| !child.hidden && self.pinned.contains(&child.id))
+            .map(|child| {
+                let top = child.bounds.origin.y;
+                (top, top + child.bounds.size.y)
+            })
+            .filter(|(top, end)| *top >= center && *end <= bottom + 1.0)
+            .collect::<Vec<_>>();
+        layers.sort_by(|left, right| right.1.total_cmp(&left.1));
+        layers.into_iter().fold(bottom, |footer_top, (top, end)| {
+            if end + 2.0 >= footer_top {
+                footer_top.min(top)
+            } else {
+                footer_top
+            }
+        })
+    }
+
     fn limits(&self, node: &SceneNode, height: f32, is_root: bool) -> (f32, f32) {
         let legacy = is_root && !self.overflow.contains_key(&node.id);
         let axes = self.overflow.get(&node.id).copied().unwrap_or(Axes {
@@ -257,6 +280,8 @@ impl PrototypeViewport {
         let is_scroller = is_root || self.overflow.contains_key(&node.id);
         let (offset_x, offset_y) = self.offset(&node.id, self.limits(node, height, is_root));
         let node_top = node.bounds.origin.y;
+        let footer_top =
+            (is_root && height != original_height).then(|| self.pinned_footer_top(node));
         let no_pinned_descendants = BTreeSet::new();
         for child in &mut node.children {
             let pinned = if is_root {
@@ -265,9 +290,18 @@ impl PrototypeViewport {
                 self.pinned.contains(&child.id)
             };
             if pinned && is_root {
-                let gap = node_top + original_height - child.bounds.origin.y - child.bounds.size.y;
-                if self.bottom_bar.as_ref() == Some(&child.id) || (-1.0..=2.0).contains(&gap) {
-                    translate_for_scroll(child, 0.0, height - original_height, &no_pinned_descendants);
+                let child_top = child.bounds.origin.y;
+                let in_footer = footer_top.is_some_and(|top| {
+                    child_top >= top
+                        && child_top + child.bounds.size.y <= node_top + original_height + 1.0
+                });
+                if self.bottom_bar.as_ref() == Some(&child.id) || in_footer {
+                    translate_for_scroll(
+                        child,
+                        0.0,
+                        height - original_height,
+                        &no_pinned_descendants,
+                    );
                 }
             } else if !pinned && (offset_x > 0.0 || offset_y > 0.0) {
                 let y = if self.sticky.contains(&child.id) {
