@@ -306,8 +306,11 @@ export function opCkBuildMeshGradientData(x, y, w, h, rows, cols, colors) {
 // side can additionally register Local Font Access faces through
 // registerSystemFont().
 export async function opCkInit(canvasId) {
-  await loadScript('/canvaskit/canvaskit.js');
-  const CK = await CanvasKitInit({ locateFile: (f) => '/canvaskit/' + f });
+  const canvasKitPath = location.pathname === '/gateway/design/workbench/'
+    ? '/gateway/design/runtime/canvaskit/'
+    : '/canvaskit/';
+  await loadScript(canvasKitPath + 'canvaskit.js');
+  const CK = await CanvasKitInit({ locateFile: (f) => canvasKitPath + f });
   if (typeof createWebImageCaches !== 'function') {
     throw new Error('CanvasKit image cache factory was not configured');
   }

@@ -26,6 +26,21 @@ use super::*;
 /// to the bound address. Non-managed mode is untouched: no token, no handshake
 /// output, no stdin thread.
 pub fn run_web_canvas(options: ServeWebOptions) -> Result<()> {
+    let studio_token = match std::env::var("OPENPENCIL_DSH_STUDIO_TOKEN") {
+        Ok(token)
+            if options.managed
+                && token.len() == 64
+                && token.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Some(format!("Bearer {token}"))
+        }
+        Err(std::env::VarError::NotPresent) => None,
+        _ => {
+            return Err(WebCanvasError::Config(
+                "DSH Studio requires a private managed daemon and a 32-byte token".into(),
+            ));
+        }
+    };
     // The public multi-account daemon is a different accept loop: it resolves
     // a tenant per connection instead of sharing one document. Everything
     // below this line is the single-document daemon, unchanged.
@@ -55,7 +70,10 @@ pub fn run_web_canvas(options: ServeWebOptions) -> Result<()> {
     // non-loopback bind outside managed mode — the proxy session belongs
     // to the daemon owner, not to whoever can reach the port.
     let loopback_bind = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
-    crate::web_auth::init(&mut editor, managed || loopback_bind);
+    crate::web_auth::init(
+        &mut editor,
+        studio_token.is_none() && (managed || loopback_bind),
+    );
     let listener = TcpListener::bind((host.as_str(), port))
         .map_err(|e| WebCanvasError::Config(format!("bind {host}:{port}: {e}")))?;
     let local_addr = listener
@@ -138,6 +156,7 @@ pub fn run_web_canvas(options: ServeWebOptions) -> Result<()> {
     {
         let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
         guard.mode = mode;
+        guard.studio_token = studio_token;
         if managed_token.is_some() || !allow_origins.is_empty() {
             guard.managed_token = managed_token;
             guard.allow_origins = allow_origins;

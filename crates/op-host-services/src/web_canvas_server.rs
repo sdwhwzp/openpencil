@@ -94,6 +94,7 @@ pub struct WebCanvasState {
     /// for the optional body-authenticated graceful-shutdown compatibility
     /// path.
     pub(crate) managed_token: Option<String>,
+    pub(crate) studio_token: Option<String>,
     /// Managed-mode `--allow-origin` allowlist. Empty outside managed mode.
     /// Read by `serve_one` (via `cors_origin_for`) to decide which `Origin`
     /// is echoed back in `Access-Control-Allow-Origin`.
@@ -163,6 +164,7 @@ impl WebCanvasState {
             version: 0,
             port,
             managed_token: None,
+            studio_token: None,
             allow_origins: Vec::new(),
             reset_consumed: false,
             auth_login_handle: None,

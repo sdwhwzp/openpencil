@@ -8,6 +8,77 @@ pub(super) fn read_triple<C: RepaintContext>(inner: &Rc<RefCell<C>>) -> Option<(
     Some((s.document_generation(), s.document_revision(), s.is_dirty()))
 }
 
+fn studio_ai_busy<C: RepaintContext>(inner: &Rc<RefCell<C>>) -> Option<bool> {
+    let context = inner.try_borrow().ok()?;
+    Some(
+        context
+            .host()
+            .editor_state()
+            .chat
+            .tabs()
+            .iter()
+            .any(op_editor_core::ChatState::has_streaming_turn),
+    )
+}
+
+pub(super) fn install_studio_ai_observer<C: RepaintContext + 'static>(inner: &Rc<RefCell<C>>) {
+    let inner = inner.clone();
+    let last = std::cell::Cell::new(false);
+    let tick = Rc::new(move || {
+        if let Some(busy) = studio_ai_busy(&inner) {
+            if busy != last.replace(busy) {
+                post_to_parent(
+                    &serde_json::json!({"type":"op-dsh/ai-state","busy":busy}).to_string(),
+                );
+            }
+        }
+    });
+    let _ = live_sync::start_interval(100, tick);
+}
+
+pub(super) fn sync_studio_snapshot<C: RepaintContext + 'static>(
+    inner: &Rc<RefCell<C>>,
+    sync: &SharedSync,
+    request_id: String,
+    retries: u8,
+) {
+    let waiting = |id: &str| {
+        post_to_parent(
+            &serde_json::json!({"type":"op-dsh/snapshot-wait","requestId":id}).to_string(),
+        );
+    };
+    if studio_ai_busy(inner) != Some(false) {
+        waiting(&request_id);
+        return;
+    }
+    let inner = inner.clone();
+    let sync = sync.clone();
+    let fallback_id = request_id.clone();
+    let url = crate::daemon_base::daemon_url("/api/mcp/version");
+    let callback = Rc::new(move |status: u16, body: String| {
+        let version = (status == 200)
+            .then(|| WebSyncClient::parse_version_probe(&body))
+            .flatten();
+        if studio_ai_busy(&inner) != Some(false) || version.is_none() {
+            waiting(&request_id);
+        } else if version.is_some_and(|version| version <= sync.borrow().client.last_version())
+            || sync.borrow().gate.conflict().is_some()
+        {
+            capture_snapshot(&inner, &sync, request_id.clone());
+        } else if retries > 0 {
+            let (inner, sync, id) = (inner.clone(), sync.clone(), request_id.clone());
+            schedule_once(300, move || {
+                sync_studio_snapshot(&inner, &sync, id, retries - 1)
+            });
+        } else {
+            waiting(&request_id);
+        }
+    });
+    if !live_sync::get_with_status(&url, callback) {
+        waiting(&fallback_id);
+    }
+}
+
 /// Serialize the live document and editor metadata atomically.
 pub(super) fn snapshot_state<C: RepaintContext>(
     inner: &Rc<RefCell<C>>,

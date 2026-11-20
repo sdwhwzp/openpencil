@@ -105,10 +105,25 @@ pub(super) fn dispatch<S: Read + Write>(
 ) -> Result<bool> {
     let state = ctx.state;
     let hub = ctx.hub;
-    let (managed_lifecycle_token, allow_origins) = {
+    let (managed_lifecycle_token, allow_origins, studio_authorized) = {
         let guard = state.lock().unwrap_or_else(|p| p.into_inner());
-        (guard.managed_token.clone(), guard.allow_origins.clone())
+        (
+            guard.managed_token.clone(),
+            guard.allow_origins.clone(),
+            guard
+                .studio_token
+                .as_ref()
+                .is_none_or(|token| req.authorization.as_ref() == Some(token)),
+        )
     };
+    if !studio_authorized {
+        crate::mcp_serve::write_mcp_http_response(
+            stream,
+            "403 Forbidden",
+            &crate::mcp_serve::rest_error_body("DSH Studio authorization required"),
+        )?;
+        return Ok(false);
+    }
     // Online never emits `*`: its requests carry credentials, and a wildcard
     // plus credentials is what lets any page on the internet read another
     // account's document. Managed mode keeps its own allowlist echo, and the

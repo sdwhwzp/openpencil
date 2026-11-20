@@ -18,6 +18,39 @@
 /// target the dev smoke page polls. Sourced from the shared MCP-port
 /// constants in `op-editor-core` so client and CLI can't drift.
 pub const DEFAULT_DAEMON_BASE: &str = op_editor_core::DEFAULT_LOCAL_DAEMON_ORIGIN;
+const STUDIO_PATH: &str = "/gateway/design/workbench/";
+
+pub(crate) fn studio_identity() -> Option<(String, String)> {
+    let location = web_sys::window()?.location();
+    if location.pathname().ok()? != STUDIO_PATH {
+        return None;
+    }
+    let search = location.search().ok()?;
+    let query = search.strip_prefix('?')?;
+    let parameter = |name| {
+        query
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value)
+    };
+    let session = parameter("editor")?;
+    let account = parameter("account")?;
+    if session.len() != 36
+        || !session.bytes().enumerate().all(|(index, value)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                value == b'-'
+            } else {
+                value.is_ascii_hexdigit()
+            }
+        })
+        || account.len() != 32
+        || !account.bytes().all(|value| value.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some((session.to_owned(), account.to_owned()))
+}
 
 /// Pick the daemon base from the page's `location.origin` + `pathname`.
 ///
@@ -51,7 +84,11 @@ pub fn daemon_base() -> String {
     let location = window.location();
     let origin = location.origin().ok();
     let pathname = location.pathname().ok();
-    resolve_daemon_base(origin.as_deref(), pathname.as_deref())
+    let base = resolve_daemon_base(origin.as_deref(), pathname.as_deref());
+    if let Some((session, _)) = studio_identity() {
+        return format!("{base}/api/task-board/design-editor/{session}");
+    }
+    base
 }
 
 #[cfg(test)]

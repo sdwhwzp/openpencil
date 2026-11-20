@@ -118,6 +118,9 @@ pub(crate) fn install<C: RepaintContext + 'static>(inner: &Rc<RefCell<C>>, sync:
     let Some(window) = web_sys::window() else {
         return;
     };
+    if crate::daemon_base::studio_identity().is_some() {
+        helpers::install_studio_ai_observer(inner);
+    }
 
     // Message listener.
     {
@@ -400,6 +403,18 @@ fn handle_open_document<C: RepaintContext + 'static>(
 /// snapshot channel (respecting `push_busy` serialization) and reply on
 /// confirmation; if nothing is due, reply immediately with the current bytes.
 fn handle_snapshot<C: RepaintContext + 'static>(
+    inner: &Rc<RefCell<C>>,
+    sync: &SharedSync,
+    request_id: String,
+) {
+    if crate::daemon_base::studio_identity().is_some() {
+        helpers::sync_studio_snapshot(inner, sync, request_id, 6);
+    } else {
+        capture_snapshot(inner, sync, request_id);
+    }
+}
+
+fn capture_snapshot<C: RepaintContext + 'static>(
     inner: &Rc<RefCell<C>>,
     sync: &SharedSync,
     request_id: String,

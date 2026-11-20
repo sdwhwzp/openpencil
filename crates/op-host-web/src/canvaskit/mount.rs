@@ -62,6 +62,11 @@ pub(super) async fn mount_ck(canvas_id: String) -> Result<(), JsValue> {
     host.editor_state_mut().editor_ui.embed = op_editor_core::EmbedHost::from_query(&search);
     host.editor_state_mut().editor_ui.host_owns_chat =
         crate::web_settings::host_owns_chat_from_query(&search);
+    let studio = crate::daemon_base::studio_identity();
+    if let Some((_, account)) = studio.as_ref() {
+        crate::identity_epoch::observe_subject(Some(&format!("dsh-{account}")));
+        host.editor_state_mut().editor_ui.locale = op_editor_core::Locale::ZhCn;
+    }
     let credential_load = crate::web_settings::load_into(host.editor_state_mut());
     // Whether the daemon holds an opened file decides Home vs canvas below;
     // ask now so the answer overlaps the CanvasKit download.
@@ -99,6 +104,9 @@ pub(super) async fn mount_ck(canvas_id: String) -> Result<(), JsValue> {
     // (the VS Code plugin) and a daemon serving an opened file (`--file`)
     // open on the canvas. Still ahead of the first paint.
     crate::studio_web::apply_entry_surface(host.editor_state_mut());
+    if studio.is_some() {
+        host.editor_state_mut().editor_ui.home.visible = false;
+    }
     if let Some(catalog) = initial_catalog {
         // The XHR itself owns the three-second timeout. Success installs the
         // target catalog; failure leaves the stored locale in place so its first
@@ -256,7 +264,9 @@ pub(super) async fn mount_ck(canvas_id: String) -> Result<(), JsValue> {
     // Device-login relay: seed `account_ui_available` + any session the
     // daemon restored (shared with the desktop GUI), then drive login
     // flows through the daemon's `/api/auth/*` proxy.
-    crate::web_auth_sync::start(&inner);
+    if studio.is_none() {
+        crate::web_auth_sync::start(&inner);
+    }
     // Collaboration relay. Starts here rather than inside the sync-reset
     // completion because it neither reads nor writes the document — it drives
     // `editor_ui.collab` only — and the panel should report availability as

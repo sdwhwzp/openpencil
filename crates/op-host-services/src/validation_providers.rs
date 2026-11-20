@@ -30,6 +30,7 @@
 //! orchestrator's `parse_validation_response` to consume. Reuses the
 //! existing request/SSE plumbing — no hand-rolled HTTP client.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use op_ai::chat_provider::{
@@ -197,9 +198,29 @@ impl ChatVisionLlmClient {
         req: VisionCallRequest,
     ) -> (VisionResponse, Option<std::time::Duration>) {
         match self.chat_request(req) {
-            Ok(request) => {
+            Ok(mut request) => {
                 let started = std::time::Instant::now();
-                let response = Self::collect_response(self.provider.send(request));
+                let deltas = if self.provider.supports_joined_cancellable_send() {
+                    request.system_prompt =
+                        "Use the attached image and follow the requested output format.".into();
+                    let Some(deltas) = self
+                        .provider
+                        .send_cancellable_joined(request, Arc::new(AtomicBool::new(false)))
+                    else {
+                        return (
+                            VisionResponse::Skipped {
+                                reason: Some(
+                                    "vision provider did not supply a joined transport".into(),
+                                ),
+                            },
+                            Some(started.elapsed()),
+                        );
+                    };
+                    deltas
+                } else {
+                    self.provider.send(request)
+                };
+                let response = Self::collect_response(deltas);
                 (response, Some(started.elapsed()))
             }
             Err(skipped) => (skipped, None),
