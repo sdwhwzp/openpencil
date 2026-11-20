@@ -390,6 +390,8 @@ OpenPencil 是 **[ZSeven-W](https://github.com/ZSeven-W)** 出品的一系列纯
 | **[jian](https://github.com/ZSeven-W/jian)** | 纯 Rust、GPU-Skia UI 框架 — 组件、布局、事件和热重载集于一栈。将声明式的 `.op` 文档变为原生、AI 可控的应用，无需 JS 运行时、无 DOM、无 Electron。OpenPencil 的 UI 框架（`vendor/jian`）。 |
 | **[noema](https://github.com/ZSeven-W/noema)** | 面向编程智能体的本地优先、非向量记忆系统。以可检视的文件形式提供持久记忆、为新条目提供审阅队列，以及词法式（无需嵌入）召回 — 适用于 Zode、Codex、Claude Code 和 MCP 运行时。 |
 
+自托管 DSH 的团队可接入 [DSH 设计工作台](./deploy/dsh-design-studio/README.md)，在账号网关内画图、定稿触发开发，并在手机上预览定稿。
+
 ## 为什么选择 Rust
 
 OpenPencil 已从头用 **Rust** 完成重写（[#129](https://github.com/ZSeven-W/openpencil/issues/129)）。重写已经完成 — TypeScript + Electron 版编辑器已在 `v0.7.5` 退役，本仓库中的 Rust workspace 就是当前产品本身：一个体积更小、速度更快的原生核心，从单一代码库支持更多平台。

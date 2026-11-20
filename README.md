@@ -486,6 +486,8 @@ OpenPencil is part of a family of pure-Rust, AI-native tools from **[ZSeven-W](h
 | <img src="./screenshot/logo-jian-rounded.png" alt="jian logo" width="40" /> **[jian](https://github.com/ZSeven-W/jian)** | Pure-Rust, GPU-Skia UI framework — widgets, layout, events, and hot reload in one stack. Turns a declarative `.op` document into a native, AI-controllable app with no JS runtime, no DOM, no Electron. OpenPencil's UI framework (`vendor/jian`). |
 | <img src="./screenshot/logo-noema-rounded.png" alt="noema logo" width="84" /> **[noema](https://github.com/ZSeven-W/noema)** | Local-first, non-vector memory system for coding agents. Durable memory as inspectable files, a review queue for new entries, and lexical (embedding-free) recall — works across Zode, Codex, Claude Code, and MCP runtimes. |
 
+For self-hosted DSH teams, the [Design Studio integration](./deploy/dsh-design-studio/README.md) adds project handoff, automatic development tasks, and mobile preview links to the DSH account gateway.
+
 ## Why Rust
 
 OpenPencil was rewritten from the ground up in **Rust** ([#129](https://github.com/ZSeven-W/openpencil/issues/129)). The rewrite is complete — the TypeScript + Electron editor was retired at `v0.7.5`, and the Rust workspace in this repo is the product: one native core that is dramatically smaller and faster, and runs on more platforms from a single codebase.

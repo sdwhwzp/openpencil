@@ -1,0 +1,497 @@
+diff --git a/npm-shrinkwrap.json b/npm-shrinkwrap.json
+index aec1f42..5b63613 100644
+--- a/npm-shrinkwrap.json
++++ b/npm-shrinkwrap.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "dsh-passwords",
+-  "version": "2.7.8-dsh.20261118.2",
++  "version": "2.7.8-dsh.20261119.1",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "dsh-passwords",
+-      "version": "2.7.8-dsh.20261118.2",
++      "version": "2.7.8-dsh.20261119.1",
+       "license": "BSD-3-Clause",
+       "dependencies": {
+         "bcryptjs": "^3.0.2",
+diff --git a/package.json b/package.json
+index 51be776..9d1385e 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "dsh-passwords",
+-  "version": "2.7.8-dsh.20261118.2",
++  "version": "2.7.8-dsh.20261119.1",
+   "description": "dsh-passwords: a server-grade gateway that turns DeepSeek Harness into a multi-tenant platform — remote access + automatic HTTPS, per-subuser permissions & quotas, sandbox enforcement, first-run setup, SQLite/MySQL auth with at-rest encryption, rate-limit and audit log (bilingual zh/en UI)",
+   "type": "module",
+   "main": "dist/index.js",
+@@ -86,7 +86,7 @@
+     "build:windows-assistant": "npm run build:local-workspace:bundle && pkg dist/local-workspace-standalone.cjs --targets node22-win-x64 --output \"release/山东梯智物联AI本机助手.exe\" --compress Brotli --no-bytecode --public-packages \"*\" --public",
+     "pretest": "npm run build",
+     "test": "node --import tsx --test \"test/**/*.test.ts\"",
+-    "prepack": "node scripts/clean-dist.mjs && npm run build",
++    "prepack": "node scripts/clean-dist.mjs && npm run build && node scripts/prepare-design-editor.mjs",
+     "start": "node dist/cli.js serve-gateway",
+     "start:gateway": "node dist/cli.js serve-gateway"
+   },
+diff --git a/src/client/index.tsx b/src/client/index.tsx
+index 0d79bc1..be36147 100644
+--- a/src/client/index.tsx
++++ b/src/client/index.tsx
+@@ -19,9 +19,11 @@ import { ChatLauncher } from './chat';
+ import { TokenReporter } from './token';
+ import { LocalWorkspaceLauncher } from './local-workspace-launcher';
+ import { ServicesLauncher } from './services-launcher';
++import { DesignLauncher, DesignPanel } from './design-studio';
+ import { ServicesPanel } from './services-panel';
+ import { DesktopDownloadsPanel } from './desktop-downloads';
+ import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client';
++import type { SessionId } from '@deepseek-ai/dsh-session/types';
+ import { ManagedFilesLauncher } from './managed-files-launcher';
+ import { ManagedFilesPage } from './managed-files-page';
+ import { zh, en } from './locales';
+@@ -223,6 +225,17 @@ export async function apply(ctx: ClientContext): Promise<() => void | Promise<vo
+     }, DesktopDownloadsPanel),
+   );
+   const servicesPanelId = 'dsh-passwords-services' as MainPanelId;
++  const designPanelId = 'dsh-passwords-design' as MainPanelId;
++  ctx.slots.inject('main', () =>
++    ctx.slots.register({ name: 'main', key: designPanelId, locale: 'dshpw',
++      inject: () => ({ openSession: (id: string) => { ctx.layout.selectPanel(null); ctx.uiWorkspace.openSession(id as SessionId); } }),
++    }, DesignPanel),
++  );
++  ctx.slots.inject('sidebar.workspaces.action', () =>
++    ctx.slots.register({ name: 'sidebar.workspaces.action', id: designPanelId, order: 7, locale: 'dshpw',
++      inject: () => ({ onOpen: () => ctx.layout.selectPanel(designPanelId) }),
++    }, DesignLauncher),
++  );
+   ctx.slots.inject('main', () =>
+     ctx.slots.register({ name: 'main', key: servicesPanelId, locale: 'dshpw',
+       inject: () => ({ onBack: () => ctx.layout.selectPanel(null) }),
+diff --git a/src/client/locales.ts b/src/client/locales.ts
+index a50c9a1..b202bab 100644
+--- a/src/client/locales.ts
++++ b/src/client/locales.ts
+@@ -16,6 +16,7 @@ export const zh = {
+   desktopUnavailable: '安装包暂不可用，请联系管理员。',
+   desktopLoading: '正在加载安装包…',
+   servicesTitle: '运行服务',
++  designStudio: '设计工作台',
+   servicesAdminHint: '管理所有账号由 Agent 托管的测试服务。',
+   servicesUserHint: '查看和停止自己在各个项目中启动的测试服务。',
+   servicesLifetime: '服务在会话结束后继续运行，异常退出自动重启。你或管理员主动停止后，会取消自动重启和开机启动。',
+@@ -428,6 +429,7 @@ export const en: Record<keyof typeof zh, string> = {
+   desktopUnavailable: 'Installers are unavailable. Please contact your administrator.',
+   desktopLoading: 'Loading installers…',
+   servicesTitle: 'Running services',
++  designStudio: 'Design studio',
+   servicesAdminHint: 'Manage Agent-hosted development services across all accounts.',
+   servicesUserHint: 'View and stop your development services across projects.',
+   servicesLifetime: 'Services keep running after a conversation ends and restart after a crash. Stopping a service yourself or through an administrator disables automatic restart and startup on boot.',
+diff --git a/src/gateway.ts b/src/gateway.ts
+index 6518cab..c67ed12 100644
+--- a/src/gateway.ts
++++ b/src/gateway.ts
+@@ -4011,6 +4011,23 @@ export function createGatewayServer(
+     res.sendFile(fileURLToPath(new URL('./services.js', import.meta.url)));
+   });
+   registerTenantServiceRoutes(app, config, db, apiAuth);
++  if (config.tenantTaskBoard?.enabled) {
++    app.use('/gateway/design', (req, res, next) => {
++      if (req.method !== 'GET' && req.method !== 'HEAD') { res.sendStatus(405); return; }
++      if ((req.path === '/' || req.path === '/preview.html') && !authedUser(req)) {
++        const next = '/gateway/design' + req.path + new URL(req.url, 'http://localhost').search;
++        res.redirect('/gateway/login?next=' + encodeURIComponent(next)); return;
++      }
++      if (!apiAuth(req, res)) return;
++      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
++      res.setHeader('Cache-Control', 'private, no-cache');
++      res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' data: blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'");
++      next();
++    });
++    app.use('/gateway/design/runtime', express.static(fileURLToPath(new URL('./design-runtime/', import.meta.url)), { index: false, redirect: false }));
++    app.use('/gateway/design', express.static(fileURLToPath(new URL('../integrations/design-studio/', import.meta.url))));
++    app.use('/gateway/design', (_req, res) => { res.sendStatus(404); });
++  }
+ 
+   // ── 主用户紧急清理（十次头像点击后显示；密码验证后异步执行） ──
+   // 清理器从临时目录启动，先停止宿主与网关，再删除 DSH/dsh-passwords 的全部
+diff --git a/src/task-board-engine.d.ts b/src/task-board-engine.d.ts
+index a1872a7..de09b54 100644
+--- a/src/task-board-engine.d.ts
++++ b/src/task-board-engine.d.ts
+@@ -20,6 +20,8 @@ export interface HostTimerFace {
+   interval(callback: () => void, delay: number): () => void;
+ }
+ export class TaskBoardHostService {
++  snapshot: import('./design-studio.js').DesignBoard['snapshot'];
++  apply: import('./design-studio.js').DesignBoard['apply'];
+   constructor(gateway: BoardGateway, options: {
+     ledger: HostTaskLedger;
+     ownerPeer?: InvokeRemoteRequest['peer'];
+diff --git a/src/tenant-task-board.ts b/src/tenant-task-board.ts
+index 93d1a4b..1405f72 100644
+--- a/src/tenant-task-board.ts
++++ b/src/tenant-task-board.ts
+@@ -14,6 +14,7 @@ import { verifyPrincipalHeaders, type AuthenticatedPrincipal } from './principal
+ import { TaskBoardHostService, HostTaskLedger, createOwnerPeer, makeTaskBoardRoutes, parseTaskDraft, openOneShotStream, splitModelRoute, TaskParseError, createGoalVerificationGate, normalizeCatalog, type BoardGoalFace, type BoardVerificationSettings, type BoardGateExecution, type BoardGatewayRequest, type BoardParseRequest, type HostTimerFace } from './task-board-engine.js';
+ import { customerModelAllowed } from './model-policy.js';
+ import { todayLocal } from './permissions.js';
++import { DesignStudio, designResponse } from './design-studio.js';
+ import { dailyTimeQuotaError, hourlyTokenQuotaError, monthlySpendQuotaError, spendCheckUnavailableError } from './quota-notice.js';
+ 
+ /** A gateway catalog is untrusted transport data; only an exact visible route admits a parse. */
+@@ -254,6 +255,29 @@ export function registerTenantTaskBoard(ctx: Context, db: Database, config: Plat
+     service.start();
+     return board;
+   };
++  if (config.managedWorkspaceRoot) {
++    const studio = new DesignStudio(config.managedWorkspaceRoot, async (principal, launch) => {
++      const user = validate(principal);
++      const board = boardFor(principal);
++      const listed = ctx.get('workspaceRegistry')?.list() ?? [];
++      const permitted = await ctx.get('principalAccess')?.resolve(principal, { workspaceIds: listed.map(row => row.id) });
++      if (launch) await board.refreshWorkspaces();
++      validate(principal);
++      const permissions = db.getPermissions(user.id);
++      return {
++        board: board.service,
++        projects: listed.filter(row => permitted?.readableWorkspaceIds.has(row.id) && path.isAbsolute(row.path)),
++        writable: user.role === 'admin' || Boolean(permissions?.allow_upload && permissions.sandbox_mode !== 'read-only'),
++      };
++    });
++    ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/api/task-board/design', handler: async (req, res) => {
++      const principal = verifyPrincipalHeaders(req.headers, config.internalSecret);
++      if (!principal) { res.writeHead(403); res.end(); return; }
++      await designResponse(req, res, studio, principal);
++    } }), 'dsh-passwords: project design studio');
++    void studio.recover().catch(err => console.warn('[dsh-passwords] design recovery:', String(err)));
++    ctx.effect(() => () => studio.close(), 'dsh-passwords: design storage');
++  }
+   for (const entry of readdirSync(directory, { withFileTypes: true })) {
+     if (!entry.isDirectory() || !/^u[1-9][0-9]*$/.test(entry.name)) continue;
+     try {
+diff --git a/scripts/prepare-design-editor.mjs b/scripts/prepare-design-editor.mjs
+new file mode 100644
+index 0000000..53d60b7
+--- /dev/null
++++ b/scripts/prepare-design-editor.mjs
+@@ -0,0 +1,25 @@
++import { createHash } from 'node:crypto';
++import { execFileSync } from 'node:child_process';
++import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const dest = fileURLToPath(new URL('../dist/design-runtime/', import.meta.url));
++function stage(spec, hash, input, member, output) {
++  const staging = mkdtempSync(path.join(tmpdir(), 'dsh-design-assets-'));
++  try {
++  let archive = input;
++  if (!archive) {
++    const json = execFileSync('npm', ['pack', spec, '--ignore-scripts', '--json', '--registry=https://registry.npmjs.org', '--pack-destination', staging], { encoding: 'utf8' });
++    archive = path.join(staging, JSON.parse(json)[0].filename);
++  }
++  if (createHash('sha512').update(readFileSync(archive)).digest('hex') !== hash) throw new Error('OpenPencil package integrity mismatch: ' + spec);
++  execFileSync('tar', ['-xzf', archive, '-C', staging, member, 'package/LICENSE', 'package/THIRD_PARTY_NOTICES.md']);
++  mkdirSync(output, { recursive: true });
++  cpSync(path.join(staging, member), output, { recursive: true });
++  for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync(path.join(staging, 'package', name), path.join(output, name));
++  } finally { rmSync(staging, { recursive: true, force: true }); }
++}
++stage('@zseven-w/dsh-openpencil-linux-x64@0.1.0-rc.15', '46a4aa635d3c76567f7d90090dbc85308fbcbecfde492d00576af89883cbcd0fdebe02aa43a8fefd0453d84b84e88e74a7a2ada9408e4b96817aac7e5e714835', process.env.DSH_OPENPENCIL_ARCHIVE, 'package/bin/web-bundle', dest);
++stage('@zseven-w/dsh-openpencil@0.1.0-rc.15', '34e8923314476658b4dd9d893088d4b1954cefd6a7f6bc4fdcc5b83a8a854ae0c26c7bf0ce841027ae0178d3e0d20628681314e691ad43d1d58148d1bd2ac3e1', process.env.DSH_OPENPENCIL_VIEWER_ARCHIVE, 'package/lib/viewer-assets', path.join(dest, 'viewer'));
+diff --git a/src/design-studio.ts b/src/design-studio.ts
+new file mode 100644
+index 0000000..a21f34b
+--- /dev/null
++++ b/src/design-studio.ts
+@@ -0,0 +1,218 @@
++import { createHash, randomUUID } from 'node:crypto';
++import { constants, closeSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
++import path from 'node:path';
++import { DatabaseSync } from 'node:sqlite';
++import type { IncomingMessage, ServerResponse } from 'node:http';
++import type { AuthenticatedPrincipal } from './principal.js';
++
++type Fields = Record<string, unknown>;
++type Project = { id: string; title: string; path: string };
++type Card = {
++  id: string; title: string; prompt: string; workspaceId?: string; permission?: string;
++  parentId?: string; handover?: unknown; archivedAt?: number; status: string;
++  executions: { sessionId?: string; error?: string; summary?: string }[];
++};
++export interface DesignBoard {
++  snapshot(): { tasks: Card[] };
++  apply(requestId: string, action:
++    | { kind: 'create'; id: string; input: { title: string; description: string; prompt: string; workspaceId: string; permission: 'workspace-write' } }
++    | { kind: 'run' | 'confirm-permission'; taskId: string }): unknown;
++}
++interface Access { projects: readonly Project[]; board: DesignBoard; writable: boolean }
++interface Draft { id: string; title: string; brief: string; document: string; revision: number }
++interface Delivery { id: string; owner: string; workspace: string; draft: string; revision: number; title: string; brief: string; document: string; state: string; error: string | null }
++export const designLimit = 16 * 1024 * 1024;
++const blank = '{"version":"1.0.0","children":[],"pages":[{"id":"page-1","name":"页面 1","children":[]}]}';
++
++class DesignError extends Error {
++  constructor(readonly status: number, message: string) { super(message); }
++}
++const invalid = (message: string): never => { throw new DesignError(400, message); };
++function text(value: unknown, limit: number, label: string): string {
++  if (typeof value !== 'string' || value.length > limit) return invalid(`${label}格式无效`);
++  return value.trim();
++}
++function documentText(value: unknown): string {
++  if (typeof value !== 'string' || Buffer.byteLength(value) > designLimit) return invalid('设计稿超过大小限制');
++  let doc;
++  try { doc = JSON.parse(value); } catch { return invalid('设计稿不是有效的 JSON'); }
++  if (!doc || typeof doc.version !== 'string' || (!Array.isArray(doc.children) && !Array.isArray(doc.pages))) return invalid('需要有效的 OpenPencil 设计稿');
++  return JSON.stringify(doc);
++}
++function fingerprint(value: string): string { return createHash('sha256').update(value).digest('hex'); }
++
++function materialize(project: Project, file: string, document: string, dataRoot: string): void {
++  if (!path.isAbsolute(project.path) || realpathSync(project.path) !== project.path) throw new DesignError(409, '项目目录已变更，请重新选择');
++  const rootFd = openSync(project.path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
++  try {
++    if (fstatSync(rootFd).dev !== statSync(dataRoot).dev) throw new DesignError(403, '请选择位于工作区数据盘的项目');
++    const root = process.platform === 'linux' ? `/proc/self/fd/${rootFd}` : project.path;
++    const target = path.join(root, file);
++    const temporary = path.join(root, `.dsh-design-${randomUUID()}.tmp`);
++    writeFileSync(temporary, document, { flag: 'wx', mode: 0o644 });
++    try {
++      try { linkSync(temporary, target); } catch (err) {
++        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
++        const descriptor = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
++        try {
++          const existing = fstatSync(descriptor);
++          if (!existing.isFile() || existing.size !== Buffer.byteLength(document) || readFileSync(descriptor, 'utf8') !== document) {
++            throw new DesignError(409, '项目中的定稿文件已变更，请移走同名文件后重试');
++          }
++        } finally { closeSync(descriptor); }
++      }
++    } finally { unlinkSync(temporary); }
++  } finally { closeSync(rootFd); }
++}
++
++export class DesignStudio {
++  private store?: DatabaseSync;
++  constructor(private readonly dataRoot: string, private readonly access: (principal: AuthenticatedPrincipal, launch: boolean) => Promise<Access>) {}
++
++  private database(): DatabaseSync {
++    if (this.store) return this.store;
++    const directory = path.join(this.dataRoot, '.dsh-design-studio');
++    mkdirSync(directory, { recursive: true, mode: 0o700 });
++    const store = new DatabaseSync(path.join(directory, 'designs.sqlite'));
++    store.exec(`PRAGMA journal_mode=WAL;
++      CREATE TABLE IF NOT EXISTS drafts (
++        owner TEXT NOT NULL, workspace TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
++        brief TEXT NOT NULL, document TEXT NOT NULL, revision INTEGER NOT NULL,
++        PRIMARY KEY (owner,workspace,id));
++      CREATE TABLE IF NOT EXISTS deliveries (
++        id TEXT PRIMARY KEY, owner TEXT NOT NULL, workspace TEXT NOT NULL, draft TEXT NOT NULL,
++        revision INTEGER NOT NULL, title TEXT NOT NULL, brief TEXT NOT NULL, document TEXT NOT NULL,
++        state TEXT NOT NULL DEFAULT 'pending', error TEXT, principal TEXT NOT NULL);
++      CREATE INDEX IF NOT EXISTS delivery_history ON deliveries(owner,workspace,draft,revision);`);
++    this.store = store;
++    return store;
++  }
++  close(): void { this.store?.close(); this.store = undefined; }
++
++  async recover(): Promise<void> {
++    const databaseFile = path.join(this.dataRoot, '.dsh-design-studio', 'designs.sqlite');
++    try { statSync(databaseFile); } catch (err) {
++      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
++      throw err;
++    }
++    const pending = this.database().prepare("SELECT id,principal FROM deliveries WHERE state='pending'").all();
++    for (const row of pending) {
++      try {
++        const access = await this.access(JSON.parse(String(row.principal)) as AuthenticatedPrincipal, true);
++        this.launch(String(row.id), access);
++      } catch (err) { this.recordFailure(String(row.id), err); }
++    }
++  }
++  private recordFailure(id: string, err: unknown): void {
++    const message = err instanceof Error ? err.message : '开发任务未启动';
++    this.database().prepare("UPDATE deliveries SET state='failed',error=? WHERE id=? AND state<>'started'").run(message.slice(0, 400), id);
++  }
++  private launch(id: string, access: Access): void {
++    const store = this.database();
++    const row = store.prepare('SELECT * FROM deliveries WHERE id=?').get(id) as unknown as Delivery;
++    if (row.state === 'started') return;
++    const project = access.projects.find(item => item.id === row.workspace);
++    if (!project || !access.writable) throw new DesignError(403, '当前账号没有此项目的开发权限');
++    const file = `dsh-design-${id}.op`;
++    const title = `设计开发 · ${row.title}`;
++    const prompt = `在当前业务项目中实现设计稿 ${file}。先读取这份 OpenPencil JSON（页面、图层、布局、文字、颜色和内嵌素材），再检查项目已有路由、组件和开发约定。按设计实现可运行的页面，执行该项目适用的构建或测试，并在会话中报告改动文件、核验结果及预览方式。保留原始定稿文件。\n\n美工的页面与交互说明：\n${row.brief || '根据设计稿和当前项目约定实现。'}`;
++    const card = access.board.snapshot().tasks.find(item => item.id === id);
++    if (card && (card.title !== title || card.prompt !== prompt || card.workspaceId !== project.id || card.permission !== 'workspace-write' || card.parentId || card.handover || card.archivedAt)) {
++      throw new DesignError(409, '交付任务已被修改，请在任务看板核对');
++    }
++    if (!card?.executions.length) {
++      materialize(project, file, row.document, this.dataRoot);
++      if (!card) access.board.apply(`${id}-create`, { kind: 'create', id, input: { title, description: `设计稿第 ${row.revision} 版`, prompt, workspaceId: project.id, permission: 'workspace-write' } });
++      access.board.apply(`${id}-confirm`, { kind: 'confirm-permission', taskId: id });
++      access.board.apply(`${id}-run`, { kind: 'run', taskId: id });
++    }
++    store.prepare("UPDATE deliveries SET state='started',error=NULL WHERE id=?").run(id);
++  }
++
++  async action(principal: AuthenticatedPrincipal, input: Fields): Promise<unknown> {
++    const access = await this.access(principal, input.action === 'deliver');
++    if (input.action === 'projects') return { projects: access.projects.map(({ id, title }) => ({ id, title })), writable: access.writable };
++    const project = access.projects.find(row => row.id === input.workspace);
++    if (!project) throw new DesignError(403, '没有此工作区的访问权限');
++    const store = this.database();
++    const scope = [principal.id, project.id];
++    if (input.action === 'preview') {
++      const delivery = text(input.delivery, 32, '定稿版本');
++      const row = store.prepare('SELECT title,revision,document FROM deliveries WHERE id=? AND workspace=?').get(delivery, project.id);
++      if (!row) throw new DesignError(404, '没有找到这个定稿版本');
++      return { design: row };
++    }
++    if (input.action === 'list') return { drafts: store.prepare('SELECT id,title,revision FROM drafts WHERE owner=? AND workspace=? ORDER BY rowid DESC').all(...scope) };
++    const id = text(input.id, 64, '设计稿编号');
++    if (!/^[a-f0-9]{8}-[a-f0-9-]{27}$/.test(id)) return invalid('设计稿编号无效');
++    const key = [...scope, id];
++    if (input.action === 'new') {
++      if (!access.writable) throw new DesignError(403, '此账号没有项目写入权限');
++      store.prepare('INSERT OR IGNORE INTO drafts VALUES(?,?,?,? ,?,?,1)').run(...key, '未命名设计', '', blank);
++    }
++    const read = () => store.prepare('SELECT id,title,brief,document,revision FROM drafts WHERE owner=? AND workspace=? AND id=?').get(...key) as unknown as Draft | undefined;
++    const draft = read();
++    if (!draft) throw new DesignError(404, '没有找到设计稿');
++    const history = () => {
++      const cards = access.board.snapshot().tasks;
++      return store.prepare('SELECT id,revision,state,error FROM deliveries WHERE owner=? AND workspace=? AND draft=? ORDER BY rowid DESC LIMIT 10').all(...key).map(row => {
++        const card = cards.find(item => item.id === row.id);
++        const execution = card?.executions.at(-1);
++        return { ...row, status: card?.status, sessionId: execution?.sessionId, result: execution?.summary ?? execution?.error };
++      });
++    };
++    if (input.action === 'open' || input.action === 'new') return { draft, deliveries: history() };
++    if (input.action === 'history') return { deliveries: history() };
++    if (!access.writable) throw new DesignError(403, '此账号没有项目写入权限');
++    if (input.action !== 'save' && input.action !== 'deliver') return invalid('未知操作');
++    const title = text(input.title, 100, '设计名称');
++    const brief = text(input.brief, 4000, '开发说明');
++    const document = documentText(input.document);
++    if (!title) return invalid('请输入设计名称');
++    const changed = title !== draft.title || brief !== draft.brief || document !== draft.document;
++    if (changed && draft.revision !== input.revision) throw new DesignError(409, '另一页面已保存新版本，请导出当前稿件并重新打开');
++    const revision = draft.revision + Number(changed);
++    if (input.action === 'deliver') {
++      const doc = JSON.parse(document);
++      if (!doc.children?.length && !doc.pages?.some((page: Fields) => Array.isArray(page?.children) && page.children.length)) return invalid('请先在画布中添加设计内容');
++    }
++    store.exec('BEGIN IMMEDIATE');
++    const task = fingerprint(JSON.stringify([principal.id, project.id, id, revision])).slice(0, 32);
++    try {
++      const latest = read();
++      if (latest?.revision !== draft.revision) throw new DesignError(409, '另一页面已保存新版本，请重新打开');
++      if (changed) store.prepare('UPDATE drafts SET title=?,brief=?,document=?,revision=? WHERE owner=? AND workspace=? AND id=?').run(title, brief, document, revision, ...key);
++      if (input.action === 'deliver') store.prepare('INSERT OR IGNORE INTO deliveries (id,owner,workspace,draft,revision,title,brief,document,principal) VALUES(?,?,?,?,?,?,?,?,?)').run(task, ...key, revision, title, brief, document, JSON.stringify(principal));
++      store.exec('COMMIT');
++    } catch (err) { store.exec('ROLLBACK'); throw err; }
++    if (input.action === 'deliver') {
++      try { this.launch(task, access); } catch (err) { this.recordFailure(task, err); }
++    }
++    return { revision, ...(input.action === 'deliver' ? { deliveries: history() } : {}) };
++  }
++}
++
++export async function designResponse(req: IncomingMessage, res: ServerResponse, studio: DesignStudio, principal: AuthenticatedPrincipal): Promise<void> {
++  res.setHeader('content-type', 'application/json; charset=utf-8');
++  res.setHeader('cache-control', 'no-store');
++  try {
++    if (req.method !== 'POST' || req.headers['x-dsh-design'] !== '1' || !req.headers['content-type']?.startsWith('application/json') ||
++        (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin')) throw new DesignError(403, '需要从 DSH 设计工作台访问');
++    let bytes = 0;
++    const chunks: Buffer[] = [];
++    for await (const chunk of req) {
++      bytes += chunk.length;
++      if (bytes > designLimit * 2 + 16_384) throw new DesignError(413, '设计稿超过大小限制');
++      chunks.push(Buffer.from(chunk));
++    }
++    let input;
++    try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return invalid('请求格式无效'); }
++    if (!input || typeof input !== 'object' || Array.isArray(input)) return invalid('请求格式无效');
++    const result = await studio.action(principal, input);
++    res.end(JSON.stringify(result));
++  } catch (err) {
++    res.statusCode = err instanceof DesignError ? err.status : 500;
++    res.end(JSON.stringify({ error: err instanceof DesignError ? err.message : '设计工作台暂时无法处理该请求' }));
++    if (!(err instanceof DesignError)) console.warn('[dsh-passwords] design studio:', err instanceof Error ? err.message : 'operation failed');
++  }
++}
+diff --git a/test/design-studio.test.ts b/test/design-studio.test.ts
+new file mode 100644
+index 0000000..a9d32d2
+--- /dev/null
++++ b/test/design-studio.test.ts
+@@ -0,0 +1,59 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import path from 'node:path';
++import { randomUUID } from 'node:crypto';
++import { DesignStudio, type DesignBoard } from '../src/design-studio.js';
++import { HostTaskLedger, TaskBoardHostService } from '../dist/task-board-engine.js';
++
++test('drawing revisions are scoped, immutable on handoff, and start one writable board execution per revision', async t => {
++  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'dsh-design-test-')));
++  const project = { id: 'test-project', title: '测试项目', path: path.join(root, 'project') };
++  mkdirSync(project.path);
++  const ledger = new HostTaskLedger(path.join(root, 'board'));
++  const calls: string[] = [];
++  const service = new TaskBoardHostService({ invoke: async request => {
++    calls.push(`${request.namespace}/${request.method}`);
++    if (request.method === 'create') return { sessionId: 'design-session' };
++    return {};
++  }, stream: async () => ({ async *[Symbol.asyncIterator]() {} }) }, { ledger, commandDispatcher: { execute: async () => ({}) } });
++  const user = { id: '1', role: 'user', username: 'designer', source: 'dsh-passwords' } as const;
++  const other = { ...user, id: '2' };
++  const access = async (actor: typeof user | typeof other) => ({ board: service as unknown as DesignBoard, projects: [project], writable: actor.id === '1' });
++  const studio = new DesignStudio(root, access);
++  t.after(() => { service.dispose(); studio.close(); rmSync(root, { recursive: true, force: true }); });
++  const key = { workspace: project.id, id: randomUUID() };
++  const call = (action: string, args = {}) => studio.action(user, { ...key, action, ...args }) as Promise<Record<string, any>>;
++  const fresh = await call('new');
++  const blank = { ...fresh.draft, brief: '在 /devices 实现该页', title: '设备列表' };
++  await assert.rejects(call('deliver', blank), /添加设计内容/);
++  const input = { ...blank, document: JSON.stringify({ version: '1.0.0', children: [{ type: 'rectangle', id: 'button', width: 120, height: 40 }] }) };
++  await assert.rejects(studio.action(other, { ...key, action: 'open' }), /没有找到/);
++  await assert.rejects(studio.action(other, { ...key, ...input, action: 'new' }), /没有项目写入权限/);
++  await assert.rejects(call('list', { workspace: 'unassigned' }), /没有此工作区/);
++  const saved = await call('save', input);
++  assert.equal(saved.revision, 2);
++  assert.equal(calls.length, 0);
++  await assert.rejects(call('save', { ...input, title: '旧标签' }), /另一页面/);
++  const [first, second] = await Promise.all([call('deliver', input), call('deliver', input)]);
++  const id = first.deliveries[0].id;
++  assert.equal(first.deliveries[0].state, 'started', first.deliveries[0].error);
++  assert.equal(second.deliveries[0].id, id);
++  const preview = await studio.action(other, { action: 'preview', workspace: project.id, delivery: id }) as { design: { document: string } };
++  assert.equal(preview.design.document, input.document);
++  await assert.rejects(call('preview', { delivery: id, workspace: 'unassigned' }), /没有此工作区/);
++  assert.equal(readFileSync(path.join(project.path, `dsh-design-${id}.op`), 'utf8'), input.document);
++  const card = (service as unknown as DesignBoard).snapshot().tasks[0];
++  assert.equal(card.executions.length, 1);
++  assert.equal(card.permission, 'workspace-write');
++  assert.equal(card.workspaceId, project.id);
++  assert.match(card.prompt, /\/devices/);
++  for (let attempt = 0; attempt < 20 && !calls.includes('session/create'); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
++  assert.equal(calls.filter(call => call === 'session/create').length, 1);
++  studio.close();
++  await studio.recover();
++  const reopened = await call('open');
++  assert.equal(reopened.draft.document, input.document);
++  assert.equal(reopened.deliveries.length, 1);
++});
