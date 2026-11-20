@@ -305,10 +305,9 @@ impl PreviewSession {
         // opaque to the borrow checker at the call site) without
         // conflicting with the outstanding `&mut self.app`. Re-borrowed
         // immediately after for the rebuild that follows.
-        let outgoing_page = self
-            .overlay_runtime_state(&self.scene)
-            .active_page()
-            .cloned();
+        let outgoing_page = (!self.prototype_has_authored_viewport())
+            .then(|| self.overlay_runtime_state(&self.scene).active_page().cloned())
+            .flatten();
         let app = self
             .app
             .as_mut()

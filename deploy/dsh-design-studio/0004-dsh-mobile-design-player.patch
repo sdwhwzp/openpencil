@@ -1,0 +1,852 @@
+diff --git a/integrations/design-studio/player/board-player.mjs b/integrations/design-studio/player/board-player.mjs
+new file mode 100644
+index 0000000..0b78b1a
+--- /dev/null
++++ b/integrations/design-studio/player/board-player.mjs
+@@ -0,0 +1,106 @@
++import { boardDocument, boardsFor } from './boards.mjs';
++
++export function canvasSize(screen) {
++  const width = Math.max(1, screen.clientWidth);
++  const height = Math.max(1, screen.clientHeight);
++  const dpr = Math.max(1, Math.min(devicePixelRatio, 2, Math.sqrt(3_000_000 / (width * height))));
++  return { width, height, dpr };
++}
++
++export async function openBoards(screen, canvas, source, onScreen, onError) {
++  const boards = boardsFor(source);
++  if (!boards.length) throw new Error('此版本没有可播放的画板');
++  const runtime = new URL('./runtime/', location.href);
++  let size = canvasSize(screen);
++  function updateCanvas({ width, height, dpr }) {
++    canvas.width = Math.round(width * dpr);
++    canvas.height = Math.round(height * dpr);
++  }
++  updateCanvas(size);
++  const { createViewer } = await import(new URL('sdk.js', runtime));
++  const viewer = await createViewer({
++    canvas,
++    wasmUrl: new URL('op_web_sdk_bg.wasm', runtime).href,
++    canvasKitBaseUrl: new URL('canvaskit/', runtime).pathname,
++  });
++  if (viewer.wheelHandler) canvas.removeEventListener('wheel', viewer.wheelHandler);
++  screen.classList.add('board-scroll');
++
++  let index = 0;
++  let fit = false;
++  let scale = 1;
++  let bounds;
++  const overflow = screen.querySelector('#overflow');
++
++  function viewport() {
++    const { width, height } = size;
++    if (!bounds) {
++      viewer.zoomToFit(width, height);
++      return;
++    }
++    const left = (width - bounds.width * scale) / 2;
++    const top = Math.max(0, (height - bounds.height * scale) / 2) - screen.scrollTop;
++    const bottom = Math.max(0, height - top - bounds.height * scale);
++    canvas.style.clipPath = `inset(${Math.max(0, top)}px ${Math.max(0, left)}px ${bottom}px ${Math.max(0, left)}px)`;
++    viewer.setViewport({ panX: left - bounds.x * scale, panY: top - bounds.y * scale, zoom: scale });
++  }
++
++  function layout() {
++    scale = bounds ? Math.min(size.width / bounds.width, fit ? size.height / bounds.height : Infinity) : 1;
++    overflow.style.height = `${bounds ? Math.min(10_000_000, Math.max(0, Math.ceil(bounds.height * scale - size.height))) : 0}px`;
++    viewport();
++  }
++
++  function show(next) {
++    const board = boards[next];
++    if (!board) return;
++    index = next;
++    bounds = board.bounds;
++    viewer.load(boardDocument(source, board, bounds));
++    canvas.style.clipPath = '';
++    screen.scrollTop = 0;
++    layout();
++    onScreen(String(index), board.name);
++  }
++
++  screen.addEventListener('scroll', viewport, { passive: true });
++  let resizing = false;
++  let closed = false;
++  const observer = new ResizeObserver(async () => {
++    if (resizing || closed) return;
++    resizing = true;
++    try {
++      let nextSize = canvasSize(screen);
++      while (!closed && (size.width !== nextSize.width || size.height !== nextSize.height || size.dpr !== nextSize.dpr)) {
++        size = nextSize;
++        updateCanvas(size);
++        await viewer._inner.attach_canvas(canvas.id);
++        if (closed) return;
++        viewer._inner.push_scene();
++        layout();
++        nextSize = canvasSize(screen);
++      }
++    } catch {
++      onError('无法调整预览尺寸，请返回重新打开');
++    } finally {
++      resizing = false;
++      if (closed) viewer.destroy();
++    }
++  });
++  observer.observe(screen);
++  show(0);
++
++  return {
++    choices: boards.map((board, index) => ({ value: String(index), label: board.name })),
++    choose(value) { show(Number(value)); },
++    restart() { show(0); },
++    step(delta) { show(index + delta); },
++    fit(value) { fit = value; screen.scrollTop = 0; layout(); },
++    close() {
++      closed = true;
++      observer.disconnect();
++      screen.removeEventListener('scroll', viewport);
++      if (!resizing) viewer.destroy();
++    },
++  };
++}
+diff --git a/integrations/design-studio/player/boards.mjs b/integrations/design-studio/player/boards.mjs
+new file mode 100644
+index 0000000..ba739af
+--- /dev/null
++++ b/integrations/design-studio/player/boards.mjs
+@@ -0,0 +1,82 @@
++const coordinate = value => Number.isFinite(value) ? value : 0;
++const visible = node => node && node.enabled !== false && node.visible !== false;
++
++export function rectangle(node, parent = { x: 0, y: 0 }) {
++  if (![node.width, node.height].every(value => Number.isFinite(value) && value > 0)) return null;
++  return {
++    x: parent.x + coordinate(node.x), y: parent.y + coordinate(node.y),
++    width: node.width, height: node.height,
++  };
++}
++
++export function contains(bounds, x, y) {
++  return x >= bounds.x && x < bounds.x + bounds.width && y >= bounds.y && y < bounds.y + bounds.height;
++}
++
++export function boardsFor(document) {
++  const pages = document.pages?.length ? document.pages : [{ id: 'default', name: document.name, children: document.children }];
++  return pages.flatMap(page => {
++    const nodes = (page.children ?? []).filter(visible);
++    const frames = nodes.filter(node => node.type === 'frame' && rectangle(node));
++    if (!frames.length) return nodes.length ? [{ page, nodes, name: page.name || '画布' }] : [];
++    return frames.map(frame => {
++      const bounds = rectangle(frame);
++      const roots = nodes.filter(node => node === frame || (
++        !frames.includes(node) && contains(bounds, coordinate(node.x), coordinate(node.y))
++      ));
++      const legacyBackdrop = !document.editorMeta && frames.length === 1 &&
++        frame.x === undefined && frame.y === undefined && !frame.children?.length && !frame.screen;
++      if (legacyBackdrop && roots[0] === frame && roots.length > 1) roots.push(roots.shift());
++      return { page, nodes: roots, frame, bounds, name: frame.name || page.name || '画板' };
++    });
++  });
++}
++
++export function hasPrototype(document) {
++  const containsScreen = nodes => (nodes ?? []).some(node => visible(node) && (
++    (node.type === 'frame' && typeof node.screen === 'string' && node.screen.startsWith('/'))
++    || containsScreen(node.children)
++  ));
++  if (document.pages?.length) {
++    const routedPages = new Set(Object.values(document.routes?.routes ?? {}).map(route => route?.pageId));
++    return document.pages.some(page => containsScreen(page.children) || (
++      routedPages.has(page.id) && (page.children ?? []).some(node => visible(node) && node.type === 'frame')
++    ));
++  }
++  return containsScreen(document.children);
++}
++
++export function boardDocument(document, board, bounds) {
++  const pageId = board.page.id || 'default';
++  const pages = document.pages?.length ? [...document.pages] : [board.page];
++  const activePageIndex = pages.indexOf(board.page);
++  const included = new Set(board.nodes);
++  const otherRoots = (board.page.children ?? []).filter(node => !included.has(node));
++  const children = [...board.nodes];
++  if (bounds) {
++    const used = new Set();
++    const scan = nodes => {
++      for (const node of nodes ?? []) {
++        used.add(node?.id);
++        scan(node?.children);
++      }
++    };
++    pages.forEach(page => scan(page.children));
++    let backdrop = 'dsh-player-backdrop';
++    while (used.has(backdrop)) backdrop += '-';
++    children.push({
++      type: 'rectangle', id: backdrop, ...bounds,
++      fill: [{ type: 'solid', color: board.page.backgroundColor || '#ffffff' }],
++    });
++  }
++  pages[activePageIndex] = { ...board.page, id: pageId, name: board.name, children };
++  if (otherRoots.length) {
++    let id = `${pageId}-components`;
++    while (pages.some(page => page.id === id)) id += '-';
++    pages.push({ id, name: board.name, children: otherRoots });
++  }
++  return JSON.stringify({
++    ...document, children, pages,
++    editorMeta: { ...document.editorMeta, activePageIndex },
++  });
++}
+diff --git a/integrations/design-studio/player/index.html b/integrations/design-studio/player/index.html
+new file mode 100644
+index 0000000..8f79e2a
+--- /dev/null
++++ b/integrations/design-studio/player/index.html
+@@ -0,0 +1,34 @@
++<!doctype html>
++<html lang="zh-CN">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
++  <title>定稿预览 · DSH</title>
++  <link rel="stylesheet" href="./player.css">
++</head>
++<body>
++  <main id="screen" aria-label="设计画板">
++    <canvas id="drawing" tabindex="0"></canvas>
++    <div id="overflow" aria-hidden="true"></div>
++  </main>
++  <div id="status">
++    <p id="message" role="status">正在载入定稿…</p>
++    <a href="dsh-design-player://close">返回定稿列表</a>
++  </div>
++  <dialog id="options" aria-labelledby="title">
++    <header>
++      <div><strong id="title"></strong><span id="revision"></span></div>
++      <button id="done" type="button" aria-label="关闭播放菜单">完成</button>
++    </header>
++    <label id="picker-label" for="board">画板</label>
++    <select id="board"></select>
++    <nav aria-label="播放操作">
++      <button id="restart" type="button">重新开始</button>
++      <button id="fit" type="button" aria-pressed="false">完整画板</button>
++      <label id="hints-option"><input type="checkbox" id="hints" checked> 热点提示</label>
++    </nav>
++    <a id="exit-player" href="dsh-design-player://close">返回定稿列表</a>
++  </dialog>
++  <script type="module" src="./player.js"></script>
++</body>
++</html>
+diff --git a/integrations/design-studio/player/player.css b/integrations/design-studio/player/player.css
+new file mode 100644
+index 0000000..c392a4a
+--- /dev/null
++++ b/integrations/design-studio/player/player.css
+@@ -0,0 +1,72 @@
++:root {
++  color-scheme: dark;
++  font: 16px system-ui, sans-serif;
++  background: #1f2023;
++  color: #f4f4f4;
++}
++body { margin: 0; }
++[hidden] { display: none !important; }
++#screen {
++  position: fixed;
++  inset: 0;
++  overflow: hidden;
++  overscroll-behavior: contain;
++  touch-action: none;
++}
++#screen.board-scroll {
++  overflow: hidden auto;
++  touch-action: pan-y;
++  scrollbar-width: none;
++}
++#screen.board-scroll::-webkit-scrollbar { display: none; }
++canvas {
++  position: sticky;
++  top: 0;
++  display: block;
++  width: 100%;
++  height: 100%;
++  user-select: none;
++  -webkit-user-select: none;
++  -webkit-touch-callout: none;
++}
++canvas:focus:not(:focus-visible) { outline: none; }
++#status { position: fixed; inset: 42% 20px auto; text-align: center; }
++button, select, a {
++  display: inline-flex;
++  align-items: center;
++  min-height: 44px;
++  padding: 0 12px;
++  color: inherit;
++  font: inherit;
++  background: #37393e;
++  border: 1px solid #51545a;
++  border-radius: 10px;
++}
++a { text-decoration: none; }
++select { display: block; width: 100%; margin-top: 6px; }
++#options {
++  position: fixed;
++  inset: auto 0 0;
++  width: min(100%, 440px);
++  max-width: 100%;
++  max-height: 80%;
++  box-sizing: border-box;
++  color: inherit;
++  background: #24262a;
++  border: 1px solid #51545a;
++  border-radius: 18px 18px 0 0;
++  padding: 16px 18px max(18px, env(safe-area-inset-bottom));
++}
++#options::backdrop { background: #1011167a; }
++#options header {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 12px;
++  padding-bottom: 16px;
++}
++#revision { color: #c1c3c8; display: block; margin-top: 4px; font-size: 14px; }
++nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 14px 0; }
++#hints-option { display: flex; align-items: center; min-height: 44px; gap: 6px; }
++button[aria-pressed="true"] { background: #4c5372; }
++#exit-player { box-sizing: border-box; display: flex; justify-content: center; }
+diff --git a/integrations/design-studio/player/player.js b/integrations/design-studio/player/player.js
+new file mode 100644
+index 0000000..99fec18
+--- /dev/null
++++ b/integrations/design-studio/player/player.js
+@@ -0,0 +1,175 @@
++import { hasPrototype } from './boards.mjs';
++import { openBoards } from './board-player.mjs';
++import { openPrototype } from './prototype-player.mjs';
++
++const byId = id => document.getElementById(id);
++const screen = byId('screen');
++const canvas = byId('drawing');
++const status = byId('status');
++const menu = byId('options');
++const picker = byId('board');
++
++function errorMessage(message) {
++  byId('message').textContent = message;
++  status.hidden = false;
++}
++
++try {
++  const response = await fetch(`./document${location.search}`, { cache: 'no-store' });
++  if (!response.ok) throw new Error(response.status === 403 ? '当前账号没有此项目的访问权限' : '无法读取定稿，请返回重试');
++  const { design } = await response.json();
++  const source = JSON.parse(design.document);
++  const interactive = hasPrototype(source);
++  byId('title').textContent = design.title;
++  byId('revision').textContent = `第 ${design.revision} 版`;
++  document.title = `${design.title} · 定稿预览`;
++  let current;
++  const onScreen = (value, label) => {
++    current = value;
++    canvas.setAttribute('aria-label', label);
++    if (Array.from(picker.options).some(option => option.value === value)) picker.value = value;
++  };
++  const player = interactive
++    ? await openPrototype(screen, canvas, design.document, source, onScreen, errorMessage)
++    : await openBoards(screen, canvas, source, onScreen, errorMessage);
++
++  for (const choice of player.choices) picker.append(new Option(choice.label, choice.value));
++  if (Array.from(picker.options).some(option => option.value === current)) picker.value = current;
++  byId('picker-label').textContent = player.flowPicker ? '原型流程' : '画板';
++  byId('hints-option').hidden = !interactive;
++  byId('done').onclick = () => menu.close();
++  picker.onchange = () => {
++    player.choose(picker.value);
++    menu.close();
++  };
++  byId('restart').onclick = () => {
++    player.restart();
++    menu.close();
++  };
++  const fitButton = byId('fit');
++  function showFitMode(fit) {
++    fitButton.setAttribute('aria-pressed', String(fit));
++    fitButton.textContent = fit ? '适应宽度' : '完整画板';
++  }
++  fitButton.onclick = () => {
++    const fit = fitButton.getAttribute('aria-pressed') !== 'true';
++    showFitMode(fit);
++    player.fit(fit);
++    menu.close();
++  };
++  byId('hints').onchange = event => player.setHints?.(event.currentTarget.checked);
++  status.hidden = true;
++
++  const pointers = new Map();
++  let hold = 0;
++  let glide = 0;
++  let press;
++  let multiple;
++
++  function openMenu() {
++    cancelAnimationFrame(glide);
++    if (menu.open) return;
++    if (player.fitsEntireFrame) showFitMode(player.fitsEntireFrame());
++    menu.showModal();
++  }
++
++  canvas.oncontextmenu = event => {
++    event.preventDefault();
++    if (event.pointerType === 'mouse') openMenu();
++  };
++  canvas.onpointerdown = event => {
++    if (event.button !== 0) return;
++    cancelAnimationFrame(glide);
++    canvas.setPointerCapture(event.pointerId);
++    const point = { x: event.clientX, y: event.clientY };
++    pointers.set(event.pointerId, point);
++    clearTimeout(hold);
++    if (pointers.size === 1) {
++      multiple = false;
++      press = { id: event.pointerId, ...point, lastX: point.x, lastY: point.y, lastAt: performance.now(), vx: 0, vy: 0 };
++    } else {
++      multiple = true;
++    }
++    hold = setTimeout(openMenu, 470);
++  };
++  canvas.onpointermove = event => {
++    const origin = pointers.get(event.pointerId);
++    if (!origin) return;
++    const x = event.clientX;
++    const y = event.clientY;
++    if (Math.hypot(x - origin.x, y - origin.y) > 8) clearTimeout(hold);
++    if (!interactive || multiple || menu.open || press?.id !== event.pointerId) return;
++    if (!press.axis) {
++      const dx = Math.abs(x - press.x);
++      const dy = Math.abs(y - press.y);
++      if (dx <= 8 && dy <= 8) return;
++      press.axis = dx > dy ? 'horizontal' : 'vertical';
++    }
++    const now = performance.now();
++    const elapsed = Math.max(8, now - press.lastAt);
++    const dx = press.axis === 'horizontal' ? press.lastX - x : 0;
++    const dy = press.axis === 'vertical' ? press.lastY - y : 0;
++    player.scroll(press.x, press.y, dx, dy);
++    Object.assign(press, { lastX: x, lastY: y, lastAt: now, vx: dx / elapsed, vy: dy / elapsed });
++  };
++  function finish(event, cancelled) {
++    if (!pointers.delete(event.pointerId)) return;
++    clearTimeout(hold);
++    if (press?.id !== event.pointerId) return;
++    const start = press;
++    press = undefined;
++    if (cancelled || multiple || menu.open) return;
++    const dx = event.clientX - start.x;
++    const dy = event.clientY - start.y;
++    if (interactive) {
++      if (start.axis) {
++        if (performance.now() - start.lastAt < 85) animateGlide(start);
++      } else if (Math.hypot(dx, dy) <= 8) {
++        player.tap(event.clientX, event.clientY, performance.now());
++      }
++    } else if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.5) {
++      player.step(dx < 0 ? 1 : -1);
++    }
++  }
++  function animateGlide({ x, y, vx, vy }) {
++    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
++    let previous = performance.now();
++    function move(now) {
++      const elapsed = Math.min(32, Math.max(0, now - previous));
++      previous = now;
++      const decay = Math.exp(-elapsed / 120);
++      vx *= decay;
++      vy *= decay;
++      if (Math.hypot(vx, vy) > 0.07 && player.scroll(x, y, vx * elapsed, vy * elapsed)) {
++        glide = requestAnimationFrame(move);
++      }
++    }
++    glide = requestAnimationFrame(move);
++  }
++  canvas.onpointerup = event => finish(event, false);
++  canvas.onpointercancel = event => finish(event, true);
++  canvas.onlostpointercapture = event => finish(event, true);
++  if (interactive) {
++    canvas.addEventListener('wheel', event => {
++      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? screen.clientHeight : 1;
++      if (player.scroll(event.clientX, event.clientY, event.deltaX * unit, event.deltaY * unit)) event.preventDefault();
++    }, { passive: false });
++  }
++  document.addEventListener('keydown', event => {
++    if (menu.open || event.target.closest('button, select, input, a')) return;
++    if (event.key === 'Escape' || event.key === 'ContextMenu') {
++      event.preventDefault();
++      openMenu();
++    } else if (event.key === 'ArrowLeft') player.step?.(-1);
++    else if (event.key === 'ArrowRight') player.step?.(1);
++  });
++  window.addEventListener('pagehide', event => {
++    if (event.persisted) return;
++    clearTimeout(hold);
++    cancelAnimationFrame(glide);
++    player.close();
++  });
++} catch (error) {
++  console.error(error);
++  errorMessage(error instanceof Error ? error.message : '定稿预览加载失败，请返回重试');
++}
+diff --git a/integrations/design-studio/player/prototype-player.mjs b/integrations/design-studio/player/prototype-player.mjs
+new file mode 100644
+index 0000000..a9999f3
+--- /dev/null
++++ b/integrations/design-studio/player/prototype-player.mjs
+@@ -0,0 +1,134 @@
++import { canvasSize } from './board-player.mjs';
++
++const bundledFonts = new Map([
++  ['Inter', 'Inter-VF.ttf'],
++  ['Roboto', 'Roboto-Regular.ttf'],
++  ['Noto Sans SC', 'NotoSansSC-VF.ttf'],
++  ['Noto Serif SC', 'NotoSerifSC-VF.ttf'],
++  ['Plus Jakarta Sans', 'PlusJakartaSans-VF.ttf'],
++  ['Archivo', 'Archivo-VF.ttf'],
++  ['Libre Caslon Text', 'LibreCaslonText-VF.ttf'],
++  ['Space Grotesk', 'SpaceGrotesk-VF.ttf'],
++  ['Manrope', 'Manrope-VF.ttf'],
++  ['Outfit', 'Outfit-VF.ttf'],
++  ['DM Sans', 'DMSans-VF.ttf'],
++  ['DM Serif Display', 'DMSerifDisplay-Regular.ttf'],
++  ['DM Mono', 'DMMono-Regular.ttf'],
++  ['Instrument Serif', 'InstrumentSerif-Regular.ttf'],
++  ['JetBrains Mono', 'JetBrainsMono-VF.ttf'],
++  ['Cormorant Garamond', 'CormorantGaramond-VF.ttf'],
++]);
++
++function fontsFor(source) {
++  const files = new Set();
++  function visit(nodes) {
++    for (const node of nodes ?? []) {
++      const file = bundledFonts.get(node.fontFamily);
++      if (file) files.add(file);
++      visit(node.children);
++    }
++  }
++  visit(source.children);
++  for (const page of source.pages ?? []) visit(page.children);
++  return files;
++}
++
++export async function openPrototype(screen, canvas, source, document, onScreen, onError) {
++  const engine = new URL('./engine/', location.href);
++  const { default: init, mount_prototype_player } = await import(new URL('op_host_web.js', engine));
++  await init();
++  const initial = canvasSize(screen);
++  canvas.width = Math.round(initial.width * initial.dpr);
++  canvas.height = Math.round(initial.height * initial.dpr);
++  const player = await mount_prototype_player(canvas.id, initial.width, initial.height, initial.dpr);
++  try {
++    await Promise.all(Array.from(fontsFor(document), async file => {
++      const response = await fetch(new URL(`assets/fonts/${file}`, engine), { signal: AbortSignal.timeout(8_000) });
++      if (response.ok) player.register_font(new Uint8Array(await response.arrayBuffer()));
++    }).map(load => load.catch(() => {})));
++    player.load(source, performance.now());
++  } catch (error) {
++    player.free();
++    throw error;
++  }
++
++  const screens = JSON.parse(player.screens());
++  const flows = screens.filter(screen => screen.flow);
++  let start;
++  let visibleScreen;
++  let hints = true;
++  let hintUntil = 0;
++  let flash = false;
++  let raf = 0;
++  let wake = 0;
++  let dirty = true;
++  let size = initial;
++
++  function schedule(force = false) {
++    dirty ||= force;
++    if (!raf) raf = requestAnimationFrame(draw);
++  }
++
++  function draw(now) {
++    raf = 0;
++    clearTimeout(wake);
++    const showHint = hints && now < hintUntil;
++    const due = player.frame(now, dirty || showHint !== flash, showHint);
++    dirty = false;
++    flash = showHint;
++    const active = screens[player.screen_index()];
++    if (active && visibleScreen !== active.path) {
++      visibleScreen = active.path;
++      onScreen(active.path, active.name);
++    }
++    const next = Math.min(due ?? Infinity, showHint ? hintUntil : Infinity);
++    if (next < Infinity) wake = setTimeout(schedule, Math.max(1, Math.ceil(next - performance.now())));
++  }
++
++  function restart(value) {
++    try {
++      player.restart(value, performance.now());
++      hintUntil = 0;
++      schedule(true);
++    } catch {
++      onError('无法重新播放原型，请返回重试');
++    }
++  }
++
++  const observer = new ResizeObserver(() => {
++    const next = canvasSize(screen);
++    if (size.width === next.width && size.height === next.height && size.dpr === next.dpr) return;
++    size = next;
++    player.resize(size.width, size.height, size.dpr);
++    schedule(true);
++  });
++  observer.observe(screen);
++  schedule(true);
++
++  return {
++    choices: (flows.length ? flows : screens).map(screen => ({ value: screen.path, label: screen.flow || screen.name })),
++    flowPicker: flows.length > 0,
++    fitsEntireFrame: () => player.fits_entire_frame(),
++    choose(value) { start = value; restart(start); },
++    restart() { restart(start); },
++    fit(value) { player.fit_entire_frame(value); schedule(true); },
++    setHints(value) { hints = value; hintUntil = 0; schedule(true); },
++    tap(x, y, now) {
++      const hit = player.tap(x, y, now);
++      hintUntil = hit ? 0 : now + 450;
++      schedule(true);
++    },
++    scroll(x, y, dx, dy) {
++      if (!player.scroll(x, y, dx, dy)) return false;
++      hintUntil = 0;
++      schedule(true);
++      return true;
++    },
++    close() {
++      observer.disconnect();
++      cancelAnimationFrame(raf);
++      clearTimeout(wake);
++      player.free();
++    },
++  };
++}
+diff --git a/npm-shrinkwrap.json b/npm-shrinkwrap.json
+index 02974b2..95c9ce2 100644
+--- a/npm-shrinkwrap.json
++++ b/npm-shrinkwrap.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "dsh-passwords",
+-  "version": "2.7.8-dsh.20261119.3",
++  "version": "2.7.8-dsh.20261119.5",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "dsh-passwords",
+-      "version": "2.7.8-dsh.20261119.3",
++      "version": "2.7.8-dsh.20261119.5",
+       "license": "BSD-3-Clause",
+       "dependencies": {
+         "bcryptjs": "^3.0.2",
+diff --git a/package.json b/package.json
+index 04f68e8..9ae0fc4 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "dsh-passwords",
+-  "version": "2.7.8-dsh.20261119.3",
++  "version": "2.7.8-dsh.20261119.5",
+   "description": "dsh-passwords: a server-grade gateway that turns DeepSeek Harness into a multi-tenant platform — remote access + automatic HTTPS, per-subuser permissions & quotas, sandbox enforcement, first-run setup, SQLite/MySQL auth with at-rest encryption, rate-limit and audit log (bilingual zh/en UI)",
+   "type": "module",
+   "main": "dist/index.js",
+diff --git a/src/design-studio.ts b/src/design-studio.ts
+index 4e4a154..7962d38 100644
+--- a/src/design-studio.ts
++++ b/src/design-studio.ts
+@@ -93,7 +93,8 @@ export class DesignStudio {
+         id TEXT PRIMARY KEY, owner TEXT NOT NULL, workspace TEXT NOT NULL, draft TEXT NOT NULL,
+         revision INTEGER NOT NULL, title TEXT NOT NULL, brief TEXT NOT NULL, document TEXT NOT NULL,
+         state TEXT NOT NULL DEFAULT 'pending', error TEXT, principal TEXT NOT NULL, git_target TEXT);
+-      CREATE INDEX IF NOT EXISTS delivery_history ON deliveries(owner,workspace,draft,revision);`);
++      CREATE INDEX IF NOT EXISTS delivery_history ON deliveries(owner,workspace,draft,revision);
++      CREATE INDEX IF NOT EXISTS delivery_workspace ON deliveries(workspace);`);
+     store.exec('BEGIN IMMEDIATE');
+     try {
+       for (const table of ['drafts', 'deliveries']) {
+@@ -166,6 +167,10 @@ export class DesignStudio {
+   async action(principal: AuthenticatedPrincipal, input: Fields): Promise<unknown> {
+     const access = await this.access(principal, input.action === 'deliver');
+     if (input.action === 'projects') return { projects: access.projects.map(({ id, title }) => ({ id, title })), writable: access.writable, maxDocumentBytes: designLimit };
++    if (input.action === 'published') {
++      const deliveries = this.database().prepare('SELECT id,title,revision FROM deliveries WHERE workspace=? ORDER BY rowid DESC');
++      return { projects: access.projects.map(({ id, title }) => ({ id, title, deliveries: deliveries.all(id) })) };
++    }
+     const project = access.projects.find(row => row.id === input.workspace);
+     if (!project) throw new DesignError(403, '没有此工作区的访问权限');
+     const store = this.database();
+diff --git a/src/gateway.ts b/src/gateway.ts
+index 1a37730..80f6de8 100644
+--- a/src/gateway.ts
++++ b/src/gateway.ts
+@@ -33,7 +33,7 @@ import { createSensitivePathChecker } from './sensitive-paths.js';
+ import { classifyDirectoryPickerTarget, directoryPickerPathWithin, directoryPickerEntryName, resolveDirectoryPickerBrowseRoots, type DirectoryPickerRootRef } from './admin.js';
+ import { createSandboxApplier } from './proxy.js';
+ import { registerMediaRoutes } from './media.js';
+-import { MobileAuth, isMobileRequest, mobileRequestToken } from './mobile-auth.js';
++import { MobileAuth, isMobileRequest, mobileCookie, mobileRequestToken } from './mobile-auth.js';
+ import { attachMobileAccount, loadMobileAccountProtocol } from './mobile-account-bridge.js';
+ import { registerDesktopDownloads } from './desktop-downloads.js';
+ import { toolResultItem, toolResultSessionId } from './tool-results-policy.js';
+@@ -4015,6 +4015,73 @@ export function createGatewayServer(
+   });
+   registerTenantServiceRoutes(app, config, db, apiAuth);
+   if (config.tenantTaskBoard?.enabled) {
++    const playerPath = '/gateway/design/player';
++    const playerCookie = '__Secure-dsh_design_player';
++    const designFiles = fileURLToPath(new URL('../integrations/design-studio/', import.meta.url));
++    const runtimeFiles = fileURLToPath(new URL('./design-runtime/', import.meta.url));
++    const grants = new Map<string, { token: string; workspace: string; delivery: string; expires: number }>();
++
++    app.use(playerPath, (req, res, next) => {
++      if (req.method !== 'GET' && req.method !== 'HEAD') { res.sendStatus(405); return; }
++      if (!req.secure || req.headers['sec-fetch-site'] === 'cross-site') { res.sendStatus(403); return; }
++      const scope = new URLSearchParams(req.originalUrl.split('?')[1]);
++      const workspace = scope.get('workspace');
++      const delivery = scope.get('delivery');
++      const now = Date.now();
++      const cookie = mobileCookie(req.headers.cookie, playerCookie);
++      let grant = cookie === null ? undefined : grants.get(cookie);
++      try {
++        if (req.path === '/index.html' && isMobileRequest(req)) {
++          const token = gatewayRequestToken(req);
++          if (!token) { res.sendStatus(401); return; }
++          if (!workspace || workspace.length > 512 || !delivery || !/^[a-f0-9]{32}$/.test(delivery)) { res.sendStatus(400); return; }
++          const user = mobileAuth.verifyAccess(token);
++          const expires = Math.min(user.exp * 1000, now + 180_000);
++          for (const [id, issued] of grants) {
++            if (issued.expires <= now || issued.token === token) grants.delete(id);
++          }
++          if (grants.size >= 4096) { res.sendStatus(503); return; }
++          const handle = randomBytes(24).toString('base64url');
++          grant = { token, workspace, delivery, expires };
++          grants.set(handle, grant);
++          res.cookie(playerCookie, handle, { path: playerPath + '/', maxAge: expires - now, secure: true, httpOnly: true, sameSite: 'strict' });
++        }
++        if (!grant || grant.expires <= now) { res.sendStatus(401); return; }
++        const user = mobileAuth.verifyAccess(grant.token);
++        res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' data: blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
++        if (req.path === '/index.html') {
++          if (workspace !== grant.workspace || delivery !== grant.delivery) { res.sendStatus(403); return; }
++          res.sendFile(path.join(designFiles, 'player', 'index.html'));
++          return;
++        }
++        if (req.path !== '/document') { next(); return; }
++        if (workspace !== grant.workspace || delivery !== grant.delivery) { res.sendStatus(403); return; }
++        const row = db.getUserById(user.userId);
++        if (!row) { res.sendStatus(401); return; }
++        const body = JSON.stringify({ action: 'preview', workspace, delivery });
++        const transport = upstreamIsHttps ? https : http;
++        const request = transport.request(new URL('/api/task-board/design', upstream), {
++          method: 'POST', agent: upstreamAgent, signal: AbortSignal.timeout(30_000),
++          headers: {
++            ...upstreamAuthenticationHeaders(),
++            ...signedPrincipalHeaders({ userId: row.id, username: row.username, role: row.role }, config.internalSecret),
++            'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'x-dsh-design': '1',
++          },
++        }, response => {
++          res.setHeader('Content-Type', 'application/json; charset=utf-8');
++          res.status(response.statusCode ?? 502);
++          void pipeline(response, res).catch(() => {});
++        });
++        res.on('close', () => request.destroy());
++        request.on('error', () => { if (!res.headersSent) res.status(502).json({ error: '暂时无法读取定稿' }); });
++        request.end(body);
++      } catch { if (!res.headersSent) res.sendStatus(401); }
++    });
++    app.use(`${playerPath}/runtime`, express.static(path.join(runtimeFiles, 'viewer'), { index: false, redirect: false }));
++    app.use(`${playerPath}/engine`, express.static(runtimeFiles, { index: false, redirect: false }));
++    app.use(playerPath, express.static(path.join(designFiles, 'player'), { index: false, redirect: false }));
++    app.use(playerPath, (_req, res) => { res.sendStatus(404); });
++
+     app.use('/gateway/design', (req, res, next) => {
+       if (req.method !== 'GET' && req.method !== 'HEAD') { res.sendStatus(405); return; }
+       if ((req.path === '/' || req.path === '/preview.html') && !authedUser(req)) {
+@@ -4029,8 +4096,8 @@ export function createGatewayServer(
+       res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' data: blob:${connects}; img-src 'self' data: blob:${editor ? ' https:' : ''}; media-src 'self' data: blob: https:; font-src 'self' data: blob: https://fonts.gstatic.com; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'`);
+       next();
+     });
+-    app.use('/gateway/design/runtime', express.static(fileURLToPath(new URL('./design-runtime/', import.meta.url)), { index: false, redirect: false }));
+-    app.use('/gateway/design', express.static(fileURLToPath(new URL('../integrations/design-studio/', import.meta.url))));
++    app.use('/gateway/design/runtime', express.static(runtimeFiles, { index: false, redirect: false }));
++    app.use('/gateway/design', express.static(designFiles));
+     app.use('/gateway/design', (_req, res) => { res.sendStatus(404); });
+   }
+ 
+diff --git a/test/design-studio.test.ts b/test/design-studio.test.ts
+index c45beeb..293a489 100644
+--- a/test/design-studio.test.ts
++++ b/test/design-studio.test.ts
+@@ -8,6 +8,30 @@ import { randomUUID } from 'node:crypto';
+ import { DesignStudio, type DesignBoard } from '../src/design-studio.js';
+ import type { AuthenticatedPrincipal } from '../src/principal.js';
+ import { HostTaskLedger, TaskBoardHostService } from '../dist/task-board-engine.js';
++import { boardDocument, boardsFor, hasPrototype } from '../integrations/design-studio/player/boards.mjs';
++
++test('playback finds a Figma flow inside a section and keeps plain legacy boards browsable', () => {
++  const screen = { type: 'frame', id: 'orders', screen: '/' };
++  const section = { type: 'frame', id: 'section', children: [screen] };
++  assert.ok(hasPrototype({ pages: [{ id: 'work', children: [section] }] }));
++  assert.equal(hasPrototype({ pages: [{ id: 'work', children: [{ ...section, visible: false }] }] }), false);
++  assert.equal(hasPrototype({ children: [{ type: 'frame', id: 'legacy' }] }), false);
++  assert.ok(hasPrototype({
++    routes: { routes: { '/': { pageId: 'page' } } },
++    pages: [{ id: 'page', children: [{ type: 'frame', id: 'root' }] }],
++  }));
++});
++
++test('playback shows sibling content over a legacy page backdrop and preserves authored layer order', () => {
++  const frame = { type: 'frame', id: 'background', width: 400, height: 800 };
++  const title = { type: 'text', id: 'title', x: 20, y: 30, content: 'Title' };
++  const document = { pages: [{ id: 'page', children: [frame, title] }] };
++  const [legacy] = boardsFor(document);
++  const rendered = JSON.parse(boardDocument(document, legacy, legacy.bounds));
++  assert.deepEqual(rendered.pages[0].children.map((node: { id: string }) => node.id), ['title', 'background', 'dsh-player-backdrop']);
++  assert.deepEqual(document.pages[0].children, [frame, title]);
++  assert.deepEqual(boardsFor({ ...document, editorMeta: { activePageIndex: 0 } })[0].nodes, [frame, title]);
++});
+ 
+ test('drawing revisions are scoped, immutable on handoff, and start one writable board execution per revision', async t => {
+   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'dsh-design-test-')));
+@@ -26,7 +50,10 @@ test('drawing revisions are scoped, immutable on handoff, and start one writable
+   }, stream: async () => ({ async *[Symbol.asyncIterator]() {} }) }, { ledger, commandDispatcher: { execute: async () => ({}) } });
+   const user = { id: '1', role: 'user', username: 'designer', source: 'dsh-passwords' } as const;
+   const other = { ...user, id: '2' };
+-  const access = async (actor: typeof user | typeof other) => ({ board: service as unknown as DesignBoard, projects: [project], writable: actor.id === '1' });
++  const outside = { ...user, id: '3' };
++  const access = async (actor: typeof other) => ({
++    board: service as unknown as DesignBoard, projects: actor.id === '3' ? [] : [project], writable: actor.id === '1',
++  });
+   const studio = new DesignStudio(root, access);
+   t.after(() => { service.dispose(); studio.close(); rmSync(root, { recursive: true, force: true }); });
+   const key = { workspace: project.id, id: randomUUID() };
+@@ -54,6 +81,11 @@ test('drawing revisions are scoped, immutable on handoff, and start one writable
+   assert.equal(second.deliveries[0].id, id);
+   const preview = await studio.action(other, { action: 'preview', workspace: project.id, delivery: id }) as { design: { document: string } };
+   assert.equal(preview.design.document, input.document);
++  assert.deepEqual(JSON.parse(JSON.stringify(await studio.action(other, { action: 'published' }))), {
++    projects: [{ id: project.id, title: project.title, deliveries: [{ id, title: input.title, revision: 2 }] }],
++  });
++  assert.deepEqual(await studio.action(outside, { action: 'published' }), { projects: [] });
++  await assert.rejects(studio.action(outside, { action: 'preview', workspace: project.id, delivery: id }), /没有此工作区/);
+   await assert.rejects(call('preview', { delivery: id, workspace: 'unassigned' }), /没有此工作区/);
+   assert.equal(readFileSync(path.join(project.path, `dsh-design-${id}.op`), 'utf8'), input.document);
+   const card = (service as unknown as DesignBoard).snapshot().tasks[0];

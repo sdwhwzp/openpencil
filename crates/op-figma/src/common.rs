@@ -108,6 +108,7 @@ pub struct ConversionContext<'tree> {
     /// Geometry / image blob pool.
     pub blobs: Vec<BlobOrString>,
     pub layout_mode: FigLayoutMode,
+    pub(crate) prototype: crate::prototype::PrototypeImport,
     /// Cross-instance virtual-GUID assignment pins ("sym|pk" → node
     /// guid) shared by every instance of the same SYMBOL.
     pub instance_assignments: HashMap<String, String>,

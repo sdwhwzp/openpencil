@@ -129,6 +129,7 @@ pub(crate) fn convert_tree_all_pages(
         id_counter: counter,
         blobs,
         layout_mode,
+        prototype: crate::prototype::PrototypeImport::from_pages(&pages),
         instance_assignments,
         instance_expansions: Default::default(),
     };
@@ -197,6 +198,7 @@ pub(crate) fn convert_tree_page(
         id_counter: counter,
         blobs,
         layout_mode,
+        prototype: crate::prototype::PrototypeImport::from_pages(&[page]),
         instance_assignments,
         instance_expansions: Default::default(),
     };
@@ -313,6 +315,7 @@ pub fn figma_node_changes_to_pen_nodes(
         id_counter: counter,
         blobs: decoded.blobs,
         layout_mode,
+        prototype: Default::default(),
         instance_assignments,
         instance_expansions: Default::default(),
     };

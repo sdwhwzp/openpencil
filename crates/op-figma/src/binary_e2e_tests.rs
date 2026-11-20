@@ -59,7 +59,7 @@ impl W {
 /// Matrix=2, ParentIndex=3, NodeType=4, NodeChange=5, Message=6.
 fn build_schema() -> Vec<u8> {
     let mut w = W::default();
-    w.var_uint(7); // definition count
+    w.var_uint(10); // definition count
 
     // 0: struct GUID { sessionID: uint, localID: uint }
     w.string("GUID");
@@ -102,19 +102,42 @@ fn build_schema() -> Vec<u8> {
     // 5: message NodeChange
     w.string("NodeChange");
     w.byte(2);
-    w.var_uint(6);
+    w.var_uint(11);
     w.field("guid", 0, false, 1);
     w.field("parentIndex", 3, false, 2);
     w.field("type", 4, false, 3);
     w.field("name", -6, false, 4);
     w.field("size", 1, false, 5);
     w.field("transform", 2, false, 6);
+    w.field("prototypeStartNodeID", 0, false, 7);
+    w.field("prototypeInteractions", 7, true, 8);
+    w.field("scrollDirection", -6, false, 9);
+    w.field("scrollBehavior", -6, false, 10);
+    w.field("opacity", -5, false, 11);
 
     // 6: message Message { nodeChanges: NodeChange[] }
     w.string("Message");
     w.byte(2);
     w.var_uint(1);
     w.field("nodeChanges", 5, true, 1);
+
+    w.string("PrototypeInteraction");
+    w.byte(2);
+    w.var_uint(2);
+    w.field("event", 8, false, 1);
+    w.field("actions", 9, true, 2);
+
+    w.string("PrototypeEvent");
+    w.byte(2);
+    w.var_uint(1);
+    w.field("interactionType", -6, false, 1);
+
+    w.string("PrototypeAction");
+    w.byte(2);
+    w.var_uint(3);
+    w.field("connectionType", -6, false, 1);
+    w.field("navigationType", -6, false, 2);
+    w.field("transitionNodeID", 0, false, 3);
 
     w.out
 }
@@ -135,6 +158,11 @@ fn encode_guid(w: &mut W, session: u32, local: u32) {
 }
 
 fn encode_node(w: &mut W, n: &NodeSpec) {
+    encode_node_fields(w, n);
+    w.var_uint(0); // end NodeChange
+}
+
+fn encode_node_fields(w: &mut W, n: &NodeSpec) {
     // guid — field id 1.
     w.var_uint(1);
     encode_guid(w, 0, n.local_id);
@@ -163,7 +191,6 @@ fn encode_node(w: &mut W, n: &NodeSpec) {
             w.var_float(v);
         }
     }
-    w.var_uint(0); // end NodeChange
 }
 
 /// Build the data chunk: DOCUMENT → CANVAS → RECTANGLE.
@@ -251,6 +278,81 @@ fn parses_a_full_binary_fig_into_a_document() {
         }
         other => panic!("expected a Rectangle, got {other:?}"),
     }
+}
+
+#[test]
+fn imports_and_saves_a_binary_prototype_with_a_transparent_hotspot() {
+    let mut writer = W::default();
+    writer.var_uint(1);
+    writer.var_uint(6);
+    for (id, parent, kind, name) in [
+        (1, None, 1, "Document"),
+        (2, Some(1), 2, "Page"),
+        (3, Some(2), 3, "Detail"),
+        (4, Some(2), 3, "Start"),
+        (5, Some(4), 4, "Hotspot"),
+        (6, Some(3), 4, "Back"),
+    ] {
+        encode_node_fields(&mut writer, &NodeSpec {
+            local_id: id,
+            parent: parent.map(|key| (0, key, "a")),
+            type_value: kind,
+            name,
+            size: Some((390.0, 844.0)),
+            transform: None,
+        });
+        if id == 2 {
+            writer.var_uint(7);
+            encode_guid(&mut writer, 0, 4);
+        }
+        if id == 4 {
+            writer.var_uint(9);
+            writer.string("VERTICAL");
+        }
+        if matches!(id, 5 | 6) {
+            writer.var_uint(8);
+            writer.var_uint(1);
+            writer.var_uint(1);
+            writer.var_uint(1);
+            writer.string("ON_CLICK");
+            writer.var_uint(0);
+            writer.var_uint(2);
+            writer.var_uint(1);
+            writer.var_uint(1);
+            writer.string(if id == 5 { "INTERNAL_NODE" } else { "BACK" });
+            if id == 5 {
+                writer.var_uint(2);
+                writer.string("NAVIGATE");
+                writer.var_uint(3);
+                encode_guid(&mut writer, 0, 3);
+            }
+            writer.var_uint(0);
+            writer.var_uint(0);
+            writer.var_uint(10);
+            writer.string("FIXED_WHEN_CHILD_OF_SCROLLING_FRAME");
+            if id == 5 {
+                writer.var_uint(11);
+                writer.var_float(0.0);
+            }
+        }
+        writer.var_uint(0);
+    }
+    writer.var_uint(0);
+
+    let fig = build_fig(&build_schema(), &writer.out);
+    let imported = parse_fig_binary(&fig, "Orders", FigLayoutMode::Preserve).unwrap();
+    let saved = serde_json::to_string(&imported.document).unwrap();
+    let reopened = op_pen_loader::load_canonical(&saved).unwrap().value;
+    let json = serde_json::to_value(reopened).unwrap();
+    let frames = json["pages"][0]["children"].as_array().unwrap();
+    let start = frames.iter().find(|node| node["name"] == "Start").unwrap();
+    let detail = frames.iter().find(|node| node["name"] == "Detail").unwrap();
+    assert_eq!(start["screen"], "/");
+    assert_eq!(start["gestures"]["prototypeOverflow"], "vertical");
+    assert_eq!(start["children"][0]["opacity"], 0.0);
+    assert_eq!(start["children"][0]["pin"], true);
+    assert_eq!(start["children"][0]["events"]["onTap"][0]["push"], r#""/figma/0-3""#);
+    assert_eq!(detail["children"][0]["events"]["onTap"][0]["pop"], true);
 }
 
 #[test]

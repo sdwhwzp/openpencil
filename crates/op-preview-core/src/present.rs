@@ -277,6 +277,7 @@ impl PreviewSession {
     ) {
         let overlaid;
         let scene = if self.runtime.widget_states.iter().next().is_none()
+            && self.prototype_viewport.is_none()
             && !self.has_preview_widget_visuals()
             && self.binding_sites.is_empty()
             && !self.ui_actions.has_visual_state()

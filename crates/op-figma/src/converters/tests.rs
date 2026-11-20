@@ -51,6 +51,7 @@ pub(super) fn fresh_ctx<'tree>() -> ConversionContext<'tree> {
         id_counter: 1,
         blobs: Vec::new(),
         layout_mode: FigLayoutMode::OpenPencil,
+        prototype: Default::default(),
         instance_assignments: HashMap::new(),
         instance_expansions: Default::default(),
     }

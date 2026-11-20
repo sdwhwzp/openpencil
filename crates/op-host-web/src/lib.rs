@@ -186,6 +186,8 @@ mod bundled_fonts_web;
 // (awaiting the TogglePreview action handler).
 #[cfg(feature = "canvaskit")]
 mod preview_host;
+#[cfg(feature = "canvaskit")]
+mod prototype_player;
 
 #[cfg(not(feature = "canvaskit"))]
 use wasm_bindgen::prelude::*;

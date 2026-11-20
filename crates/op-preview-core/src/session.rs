@@ -105,6 +105,7 @@ pub struct PreviewSession {
     /// match design mode by construction. Live widget values are
     /// overlaid onto a clone of this each frame in `paint_scene`.
     pub(crate) scene: LayoutScene,
+    pub(crate) prototype_viewport: Option<crate::prototype_viewport::PrototypeViewport>,
     /// The prepared (ref/token-resolved, page-projected / screen-
     /// normalized) but UNPROMOTED document — the geometry source the
     /// design canvas would lay out. Kept so app-mode screen switches
@@ -533,6 +534,7 @@ impl PreviewSession {
             pending_activation: None,
             root_frames,
             scene,
+            prototype_viewport: None,
             layout_doc,
             preserve_authored_geometry,
             warnings,

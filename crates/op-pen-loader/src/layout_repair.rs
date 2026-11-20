@@ -37,7 +37,14 @@ fn repair_node(node: &PenNode, rects: &mut BTreeMap<String, [f32; 4]>, is_root: 
     // Root frames default to clipped artboards in the paint adapter. Layout
     // repair must use the same default or an implicitly clipped fixed board
     // grows before paint sees it, changing its viewport and export dimensions.
-    let props = if is_root && is_frame(node) && authored_props.clip_content.is_none() {
+    let prototype_viewport = node
+        .gestures_and_semantics()
+        .0
+        .and_then(|gestures| gestures.extra.get("prototypeOverflow"))
+        .is_some_and(|overflow| overflow.is_string());
+    let props = if prototype_viewport
+        || (is_root && is_frame(node) && authored_props.clip_content.is_none())
+    {
         let mut props = authored_props.clone();
         props.clip_content = Some(true);
         std::borrow::Cow::Owned(props)

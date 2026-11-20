@@ -17,10 +17,10 @@ jian-ops-schema = { path = "../../vendor/jian/crates/jian-ops-schema" }
 flate2 = "1"
 ruzstd = "0.9.1"
 base64 = "0.22"
+serde_json = { workspace = true }
 
 [dev-dependencies]
 op-editor-core = { path = "../op-editor-core" }
 op-editor-ui = { path = "../op-editor-ui" }
 op-host-services = { path = "../op-host-services" }
 op-pen-loader = { path = "../op-pen-loader" }
-serde_json = { workspace = true }

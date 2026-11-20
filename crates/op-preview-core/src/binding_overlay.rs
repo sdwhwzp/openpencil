@@ -642,7 +642,7 @@ fn subtree_bottom(node: &SceneNode) -> f32 {
         .fold(node.bounds.origin.y + node.bounds.size.y, f32::max)
 }
 
-fn translate_for_scroll(node: &mut SceneNode, dx: f32, dy: f32, pinned_nodes: &BTreeSet<String>) {
+pub(crate) fn translate_for_scroll(node: &mut SceneNode, dx: f32, dy: f32, pinned_nodes: &BTreeSet<String>) {
     if pinned_nodes.contains(&node.id) {
         return;
     }

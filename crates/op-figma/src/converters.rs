@@ -66,10 +66,7 @@ pub fn convert_children(parent: &TreeNode, ctx: &mut ConversionContext<'_>) -> V
     let parent_stack_mode = parent.figma.get_str("stackMode").map(str::to_string);
     let mut result = Vec::new();
     for child in &parent.children {
-        if child.figma.get_bool("visible") == Some(false) {
-            continue;
-        }
-        if child.figma.get_f64("opacity").map(|o| o <= 0.0) == Some(true) {
+        if !ctx.prototype.keeps_layer(&child.figma) {
             continue;
         }
         if let Some(node) = convert_node(child, parent_stack_mode.as_deref(), ctx) {
@@ -115,6 +112,7 @@ pub fn convert_node(
         }
     };
     apply_layout_positioning(&mut node, &tree.figma, parent_stack_mode, ctx.layout_mode);
+    ctx.prototype.apply(&tree.figma, &mut node);
     Some(node)
 }
 

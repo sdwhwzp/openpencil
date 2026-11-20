@@ -111,6 +111,7 @@ impl PreviewSession {
         // later hover can change its paint without changing geometry.
         let overlaid;
         let scene: &LayoutScene = if self.runtime.widget_states.iter().next().is_none()
+            && self.prototype_viewport.is_none()
             && !self.has_preview_widget_visuals()
             && self.binding_sites.is_empty()
             && !self.ui_actions.has_visual_state()
@@ -161,6 +162,9 @@ impl PreviewSession {
         let mut scene = self.overlay_runtime_state_without_animation(base);
         self.observe_motion(&scene);
         self.animation.apply_to_scene(&mut scene);
+        if let Some(viewport) = &self.prototype_viewport {
+            viewport.apply(&mut scene);
+        }
         scene
     }
 

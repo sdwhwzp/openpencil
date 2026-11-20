@@ -83,6 +83,9 @@ mod invalidation;
 mod mode_transition;
 mod motion;
 mod present;
+mod prototype_viewport;
+#[cfg(all(test, not(target_os = "windows")))]
+mod prototype_viewport_tests;
 mod scene_helpers;
 mod session;
 mod session_paint;

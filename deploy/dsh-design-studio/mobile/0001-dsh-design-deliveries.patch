@@ -1,0 +1,880 @@
+diff --git a/DeepSeekHarnessMobile.xcodeproj/project.pbxproj b/DeepSeekHarnessMobile.xcodeproj/project.pbxproj
+index 939c5e4..f914e59 100644
+--- a/DeepSeekHarnessMobile.xcodeproj/project.pbxproj
++++ b/DeepSeekHarnessMobile.xcodeproj/project.pbxproj
+@@ -8,6 +8,7 @@
+ 
+ /* Begin PBXBuildFile section */
+ 		2D2CD7827F99F2D94E92AC89 /* MobileAccountLoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458B774AAC47375BD79C727F /* MobileAccountLoginView.swift */; };
++		2D2CD7827F99F2D94E92AC90 /* DesignDeliveriesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458B774AAC47375BD79C7280 /* DesignDeliveriesView.swift */; };
+ 		3459A8BD9696202CAC9D85A5 /* GatewaySwitcherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65B6B2953247E15BDA40F0BB /* GatewaySwitcherView.swift */; };
+ 		375D401B1B6F03015EC9073D /* GatewayProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = E638ED93D0BBFD018966FB52 /* GatewayProfile.swift */; };
+ 		39FD319C875F4B4A6893D676 /* GatewayProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B53A008218F24CA9A4DB4D1 /* GatewayProtocolTests.swift */; };
+@@ -103,6 +104,7 @@
+ 		38457CD5C46830D1CA7E6D73 /* DshMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DshMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+ 		430CA64DF207C7EF58574336 /* DeepSeekHarnessMobileApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DeepSeekHarnessMobileApp.swift; sourceTree = "<group>"; };
+ 		458B774AAC47375BD79C727F /* MobileAccountLoginView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MobileAccountLoginView.swift; sourceTree = "<group>"; };
++		458B774AAC47375BD79C7280 /* DesignDeliveriesView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DesignDeliveriesView.swift; sourceTree = "<group>"; };
+ 		59B069578BB7F31AD35F601A /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+ 		5A37B43613D712F252BA91D7 /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+ 		61A1F439244BA594BF547C92 /* AppStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
+@@ -306,6 +308,7 @@
+ 				D610757C1FF81FD953A9D000 /* WorkspaceView.swift */,
+ 				65B6B2953247E15BDA40F0BB /* GatewaySwitcherView.swift */,
+ 				458B774AAC47375BD79C727F /* MobileAccountLoginView.swift */,
++				458B774AAC47375BD79C7280 /* DesignDeliveriesView.swift */,
+ 			);
+ 			path = Views;
+ 			sourceTree = "<group>";
+@@ -556,6 +559,7 @@
+ 				3459A8BD9696202CAC9D85A5 /* GatewaySwitcherView.swift in Sources */,
+ 				D1BA3A5E9086926D0CA13E61 /* MobileAccountClient.swift in Sources */,
+ 				2D2CD7827F99F2D94E92AC89 /* MobileAccountLoginView.swift in Sources */,
++				2D2CD7827F99F2D94E92AC90 /* DesignDeliveriesView.swift in Sources */,
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};
+diff --git a/DeepSeekHarnessMobile/Core/MobileAccountClient.swift b/DeepSeekHarnessMobile/Core/MobileAccountClient.swift
+index 9c92248..f8873f6 100644
+--- a/DeepSeekHarnessMobile/Core/MobileAccountClient.swift
++++ b/DeepSeekHarnessMobile/Core/MobileAccountClient.swift
+@@ -21,6 +21,18 @@ struct MobileAccountCredential: Codable {
+     }
+ }
+ 
++struct DesignDelivery: Decodable, Identifiable {
++    let id: String
++    let title: String
++    let revision: Int
++}
++
++struct DesignProject: Decodable, Identifiable {
++    let id: String
++    let title: String
++    let deliveries: [DesignDelivery]
++}
++
+ /// Separate HTTPS requests and explicit cookies prevent credentials crossing accounts or redirects.
+ enum MobileAccountClient {
+     private static let auth = "/gateway/mobile/v1/auth"
+@@ -38,6 +50,7 @@ enum MobileAccountClient {
+         let message: String
+         var errorDescription: String? { message }
+     }
++    private struct PublishedDesigns: Decodable { let projects: [DesignProject] }
+ 
+     static func login(origin raw: String, username: String, password: String, previous: MobileAccountCredential? = nil) async throws -> MobileAccountCredential {
+         guard var parts = URLComponents(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+@@ -78,12 +91,44 @@ enum MobileAccountClient {
+         _ = try await action(origin: credential.origin, name: "logout", payload: Data("{}".utf8), refresh: credential.refreshCookie)
+     }
+ 
++    static func publishedDesigns(_ credential: MobileAccountCredential) async throws -> [DesignProject] {
++        let token = try await access(credential, endpoint: credential.endpoint)
++        guard let url = URL(string: credential.origin + "/api/task-board/design") else { throw URLError(.badURL) }
++        var req = URLRequest(url: url)
++        req.httpMethod = "POST"
++        req.httpBody = Data(#"{"action":"published"}"#.utf8)
++        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
++        req.setValue("1", forHTTPHeaderField: "X-Dsh-Design")
++        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
++        let session = isolatedSession()
++        defer { session.invalidateAndCancel() }
++        let (bytes, response) = try await session.bytes(for: req)
++        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
++        guard http.statusCode != 404 else { throw Failure(message: "当前服务器未启用设计定稿") }
++        guard (200..<300).contains(http.statusCode) else {
++            throw Failure(message: "无法读取设计定稿（\(http.statusCode)）")
++        }
++        let limit = 4 * 1024 * 1024
++        var data = Data()
++        for try await byte in bytes {
++            guard data.count < limit else { throw Failure(message: "定稿列表过大，无法载入") }
++            data.append(byte)
++        }
++        return try JSONDecoder().decode(PublishedDesigns.self, from: data).projects
++    }
++
++    static func designPlayback(_ credential: MobileAccountCredential, workspace: String, delivery: String) async throws -> URLRequest {
++        guard var parts = URLComponents(string: credential.origin) else { throw URLError(.badURL) }
++        parts.path = "/gateway/design/player/index.html"
++        parts.queryItems = [URLQueryItem(name: "workspace", value: workspace), URLQueryItem(name: "delivery", value: delivery)]
++        guard let url = parts.url else { throw URLError(.badURL) }
++        var req = URLRequest(url: url)
++        req.setValue("Bearer \(try await access(credential, endpoint: credential.endpoint))", forHTTPHeaderField: "Authorization")
++        return req
++    }
++
+     private static func action(origin: String, name: String, payload: Data, refresh: String?) async throws -> (Data, HTTPURLResponse) {
+-        let config = URLSessionConfiguration.ephemeral
+-        config.httpCookieStorage = nil
+-        config.httpShouldSetCookies = false
+-        config.timeoutIntervalForRequest = 30
+-        let session = URLSession(configuration: config, delegate: GatewayRedirectBlocker(), delegateQueue: nil)
++        let session = isolatedSession()
+         defer { session.invalidateAndCancel() }
+         guard let challengeURL = URL(string: origin + auth + "/challenge"), let actionURL = URL(string: origin + auth + "/" + name) else { throw URLError(.badURL) }
+         let (challengeData, challengeResponse) = try await request(session, URLRequest(url: challengeURL))
+@@ -100,6 +145,14 @@ enum MobileAccountClient {
+         return try await request(session, req)
+     }
+ 
++    private static func isolatedSession() -> URLSession {
++        let config = URLSessionConfiguration.ephemeral
++        config.httpCookieStorage = nil
++        config.httpShouldSetCookies = false
++        config.timeoutIntervalForRequest = 30
++        return URLSession(configuration: config, delegate: GatewayRedirectBlocker(), delegateQueue: nil)
++    }
++
+     private static func request(_ session: URLSession, _ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+         let (data, response) = try await session.data(for: request)
+         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+diff --git a/DeepSeekHarnessMobile/Core/MultiGatewayStore.swift b/DeepSeekHarnessMobile/Core/MultiGatewayStore.swift
+index 713d124..74d31d1 100644
+--- a/DeepSeekHarnessMobile/Core/MultiGatewayStore.swift
++++ b/DeepSeekHarnessMobile/Core/MultiGatewayStore.swift
+@@ -56,6 +56,13 @@ final class MultiGatewayStore: ObservableObject {
+ 
+     var activeProfile: GatewayProfile? { profiles.first { $0.id == activeID } }
+ 
++    func activeAccount() -> MobileAccountCredential? {
++        guard let activeID,
++              let key = URL(string: "https://gateway-credential.invalid/\(activeID)"),
++              let stored = GatewayTokenStore.load(for: key) else { return nil }
++        return try? MobileAccountCredential.decode(stored)
++    }
++
+     private func handleLiveActivityApproval(_ intent: AgentApprovalIntentRequest) -> Bool {
+         let store = activeStore
+         guard store.gatewayLocalID == intent.gatewayID else { return false }
+diff --git a/DeepSeekHarnessMobile/Views/DesignDeliveriesView.swift b/DeepSeekHarnessMobile/Views/DesignDeliveriesView.swift
+new file mode 100644
+index 0000000..b0b931f
+--- /dev/null
++++ b/DeepSeekHarnessMobile/Views/DesignDeliveriesView.swift
+@@ -0,0 +1,216 @@
++import SwiftUI
++import WebKit
++
++struct DesignDeliveriesView: View {
++    let account: MobileAccountCredential?
++    @State private var projects: [DesignProject]?
++    @State private var error: String?
++    @State private var retry = 0
++    @State private var selection: DesignSelection?
++
++    var body: some View {
++        Group {
++            if account == nil {
++                ContentUnavailableView("请先使用 DSH 服务器账号登录", systemImage: "person.crop.circle")
++            } else if let error {
++                DesignLoadError(message: error) { retry += 1 }
++            } else if let projects {
++                if projects.isEmpty {
++                    ContentUnavailableView("暂无设计定稿", systemImage: "play.rectangle")
++                } else {
++                    List(projects) { project in
++                        Section(project.title) {
++                            ForEach(project.deliveries) { delivery in
++                                Button {
++                                    selection = DesignSelection(workspace: project.id, id: delivery.id)
++                                } label: {
++                                    VStack(alignment: .leading, spacing: 4) {
++                                        Text(delivery.title).foregroundStyle(.primary)
++                                        Text("第 \(delivery.revision) 版")
++                                            .font(.footnote)
++                                            .foregroundStyle(.secondary)
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            } else {
++                ProgressView()
++            }
++        }
++        .navigationTitle("设计定稿")
++        .navigationBarTitleDisplayMode(.inline)
++        .task(id: retry) {
++            guard let account else { return }
++            error = nil
++            do {
++                projects = try await MobileAccountClient.publishedDesigns(account).filter { !$0.deliveries.isEmpty }
++            } catch {
++                if !Task.isCancelled { self.error = error.localizedDescription }
++            }
++        }
++        .fullScreenCover(item: $selection) { selection in
++            if let account { DesignPlaybackView(account: account, selection: selection) }
++        }
++    }
++}
++
++private struct DesignSelection: Identifiable {
++    let workspace: String
++    let id: String
++}
++
++private struct DesignPlaybackView: View {
++    let account: MobileAccountCredential
++    let selection: DesignSelection
++    @Environment(\.dismiss) private var dismiss
++    @State private var request: URLRequest?
++    @State private var error: String?
++    @State private var retry = 0
++    @State private var playerOwnsControls = false
++
++    private var immersive: Bool { playerOwnsControls && error == nil && request != nil }
++
++    var body: some View {
++        ZStack(alignment: .topLeading) {
++            Color(red: 0.12, green: 0.13, blue: 0.14).ignoresSafeArea()
++            if let error {
++                DesignLoadError(message: error) { retry += 1 }
++                    .frame(maxWidth: .infinity, maxHeight: .infinity)
++            } else if let request {
++                DesignWebView(request: request, onClose: { dismiss() }, onReady: {
++                    playerOwnsControls = $0
++                }, onError: { error = $0 })
++                    .ignoresSafeArea(.container, edges: immersive ? .all : [])
++            } else {
++                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
++            }
++            if !immersive {
++                Button {
++                    dismiss()
++                } label: {
++                    Image(systemName: "chevron.left")
++                        .font(.system(size: 17, weight: .semibold))
++                        .frame(width: 44, height: 44)
++                        .background(.regularMaterial, in: Circle())
++                }
++                .accessibilityLabel("返回定稿列表")
++                .padding(10)
++            }
++        }
++        .preferredColorScheme(.dark)
++        .statusBarHidden(immersive)
++        .persistentSystemOverlays(immersive ? .hidden : .automatic)
++        .task(id: retry) {
++            error = nil
++            request = nil
++            playerOwnsControls = false
++            do {
++                request = try await MobileAccountClient.designPlayback(account, workspace: selection.workspace, delivery: selection.id)
++            } catch {
++                if !Task.isCancelled { self.error = error.localizedDescription }
++            }
++        }
++    }
++}
++
++private struct DesignLoadError: View {
++    let message: String
++    let retry: () -> Void
++
++    var body: some View {
++        VStack(spacing: 12) {
++            Text(message).multilineTextAlignment(.center)
++            Button("重试", action: retry).buttonStyle(.bordered)
++        }
++        .padding(24)
++    }
++}
++
++private struct DesignWebView: UIViewRepresentable {
++    let request: URLRequest
++    let onClose: () -> Void
++    let onReady: (Bool) -> Void
++    let onError: (String) -> Void
++
++    func makeCoordinator() -> Coordinator {
++        Coordinator(url: request.url, onClose: onClose, onReady: onReady, onError: onError)
++    }
++
++    func makeUIView(context: Context) -> WKWebView {
++        let config = WKWebViewConfiguration()
++        config.websiteDataStore = .nonPersistent()
++        let view = WKWebView(frame: .zero, configuration: config)
++        view.navigationDelegate = context.coordinator
++        view.isOpaque = false
++        view.scrollView.bounces = false
++        view.scrollView.contentInsetAdjustmentBehavior = .never
++        view.load(request)
++        return view
++    }
++
++    func updateUIView(_ view: WKWebView, context: Context) {}
++
++    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
++        view.navigationDelegate = nil
++        view.stopLoading()
++    }
++
++    final class Coordinator: NSObject, WKNavigationDelegate {
++        let url: URL?
++        let onClose: () -> Void
++        let onReady: (Bool) -> Void
++        let onError: (String) -> Void
++
++        init(url: URL?, onClose: @escaping () -> Void, onReady: @escaping (Bool) -> Void,
++             onError: @escaping (String) -> Void) {
++            self.url = url
++            self.onClose = onClose
++            self.onReady = onReady
++            self.onError = onError
++        }
++
++        func webView(_ view: WKWebView, decidePolicyFor action: WKNavigationAction,
++                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
++            let target = action.request.url
++            if action.targetFrame?.isMainFrame == true, action.navigationType == .linkActivated,
++               target?.scheme == "dsh-design-player", target?.host == "close", view.url == url {
++                decisionHandler(.cancel)
++                onClose()
++                return
++            }
++            decisionHandler(action.targetFrame?.isMainFrame == true && action.request.url == url ? .allow : .cancel)
++        }
++
++        func webView(_ view: WKWebView, decidePolicyFor response: WKNavigationResponse,
++                     decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
++            guard let http = response.response as? HTTPURLResponse, http.url == url,
++                  response.isForMainFrame, (200..<300).contains(http.statusCode) else {
++                decisionHandler(.cancel)
++                onError("无法打开定稿，请重试")
++                return
++            }
++            decisionHandler(.allow)
++        }
++
++        func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
++            guard view.url == url else { return }
++            view.evaluateJavaScript("Boolean(document.getElementById('exit-player'))") { value, _ in
++                self.onReady(value as? Bool == true)
++            }
++        }
++
++        func webView(_ view: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
++            onError("预览连接失败，请重试")
++        }
++
++        func webView(_ view: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
++            onError("预览加载失败，请重试")
++        }
++
++        func webViewWebContentProcessDidTerminate(_ view: WKWebView) {
++            onError("预览已中断，请重试")
++        }
++    }
++}
+diff --git a/DeepSeekHarnessMobile/Views/RootView.swift b/DeepSeekHarnessMobile/Views/RootView.swift
+index 7310127..eca9ec2 100644
+--- a/DeepSeekHarnessMobile/Views/RootView.swift
++++ b/DeepSeekHarnessMobile/Views/RootView.swift
+@@ -31,6 +31,7 @@ struct RootView: View {
+ /// reference. `RootView` can still present global errors, while session/history
+ /// publications no longer invalidate the `NavigationStack` that owns the bar.
+ private struct RootNavigationHost: View, Equatable {
++    @EnvironmentObject private var hosts: MultiGatewayStore
+     let store: AppStore
+     @State private var navigationPath: [AppRoute] = []
+     @State private var newConversationTask: Task<Void, Never>?
+@@ -75,6 +76,9 @@ private struct RootNavigationHost: View, Equatable {
+                 },
+                 onScheduledTasks: {
+                     navigate(to: .scheduledTasks)
++                },
++                onDesignDeliveries: {
++                    navigate(to: .designDeliveries)
+                 }
+             )
+                 .navigationDestination(for: AppRoute.self) { route in
+@@ -127,6 +131,9 @@ private struct RootNavigationHost: View, Equatable {
+             SettingsView()
+         case .plugins:
+             WorkspaceDrawerDestination(title: "插件", message: "插件功能尚未接入")
++        case .designDeliveries:
++            DesignDeliveriesView(account: hosts.activeAccount())
++                .id(hosts.activeID)
+         case .scheduledTasks:
+             ScheduledTasksView(store: store) { sessionID in
+                 let session = store.sessions.first(where: { $0.id == sessionID }) ?? SessionSummary(
+@@ -215,6 +222,7 @@ private struct RootNavigationHost: View, Equatable {
+         case settings
+         case plugins
+         case scheduledTasks
++        case designDeliveries
+     }
+ }
+ 
+diff --git a/DeepSeekHarnessMobile/Views/WorkspaceView.swift b/DeepSeekHarnessMobile/Views/WorkspaceView.swift
+index 42d2b44..e4edda1 100644
+--- a/DeepSeekHarnessMobile/Views/WorkspaceView.swift
++++ b/DeepSeekHarnessMobile/Views/WorkspaceView.swift
+@@ -10,6 +10,7 @@ struct WorkspaceView: View {
+     let onSettings: () -> Void
+     let onPlugins: () -> Void
+     let onScheduledTasks: () -> Void
++    let onDesignDeliveries: () -> Void
+     @State private var searchQuery = ""
+     @State private var renamingSession: SessionSummary?
+     @State private var renamedTitle = ""
+@@ -212,6 +213,11 @@ struct WorkspaceView: View {
+                     .font(.system(size: 20, weight: .medium))
+                     .frame(width: 24)
+             }, action: { selectDrawerItem(onScheduledTasks) })
++            drawerItem("设计定稿", icon: {
++                Image(systemName: "play.rectangle")
++                    .font(.system(size: 20, weight: .medium))
++                    .frame(width: 24)
++            }, action: { selectDrawerItem(onDesignDeliveries) })
+             Spacer(minLength: 0)
+         }
+         .padding(.horizontal, 18)
+diff --git a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/AndroidMultiGatewayStore.kt b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/AndroidMultiGatewayStore.kt
+index 9770e33..951b21e 100644
+--- a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/AndroidMultiGatewayStore.kt
++++ b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/AndroidMultiGatewayStore.kt
+@@ -83,6 +83,9 @@ class AndroidMultiGatewayStore(private val application: Application) {
+         private set
+     val activeProfile: GatewayProfile? get() = profiles.firstOrNull { it.localId == activeId }
+ 
++    internal suspend fun activeAccount(): MobileAccountCredential? =
++        activeId?.let { credentials.loadToken("host:$it") }?.let(MobileAccountCredential::decode)
++
+     init {
+         scope.launch {
+             runCatching {
+diff --git a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/DeepSeekHarnessAndroidApp.kt b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/DeepSeekHarnessAndroidApp.kt
+index 849a7cc..dabdc77 100644
+--- a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/DeepSeekHarnessAndroidApp.kt
++++ b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/DeepSeekHarnessAndroidApp.kt
+@@ -92,6 +92,7 @@ fun DeepSeekHarnessAndroidApp() {
+             androidx.compose.runtime.key(stateHolder) {
+             DshProductApp(
+                 stateHolder = stateHolder,
++                activeAccount = hosts::activeAccount,
+                 onPickImage = { imageOwner.value = stateHolder; imagePicker.launch("image/*") },
+                 notificationRoute = notificationRoute?.takeIf { it.gatewayId == hosts.activeId },
+                 onNotificationRouteOpened = application::clearNotificationSession
+diff --git a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/platform/MobileAccountClient.kt b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/platform/MobileAccountClient.kt
+index 52621c3..b8074dd 100644
+--- a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/platform/MobileAccountClient.kt
++++ b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/platform/MobileAccountClient.kt
+@@ -44,6 +44,17 @@ internal data class MobileAccountCredential(
+     }
+ }
+ 
++@Serializable
++internal data class DesignDelivery(val id: String, val title: String, val revision: Int)
++
++@Serializable
++internal data class DesignProject(val id: String, val title: String, val deliveries: List<DesignDelivery>)
++
++@Serializable
++private data class PublishedDesigns(val projects: List<DesignProject>)
++
++internal class DesignPlayback(val url: String, val authorization: String)
++
+ /** HTTPS, no redirects and no shared cookie jar: each refresh belongs to one server/account. */
+ internal object MobileAccountClient {
+     private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
+@@ -87,6 +98,31 @@ internal object MobileAccountClient {
+         action(credential.origin, "logout", JsonObject(emptyMap()), credential.refreshCookie)
+     }
+ 
++    suspend fun publishedDesigns(credential: MobileAccountCredential): List<DesignProject> {
++        val token = access(credential, credential.endpoint)
++        return withContext(Dispatchers.IO) {
++            execute(Request.Builder().url("${credential.origin}/api/task-board/design")
++                .header("Authorization", "Bearer $token")
++                .header("X-Dsh-Design", "1")
++                .post("""{"action":"published"}""".toRequestBody(mediaType)).build()).use { response ->
++                check(response.code != 404) { "当前服务器未启用设计定稿" }
++                check(response.isSuccessful) { "无法读取设计定稿（${response.code}）" }
++                val source = response.body?.source() ?: error("服务器没有返回设计定稿")
++                source.request(4_194_305)
++                check(source.buffer.size <= 4_194_304) { "定稿列表过大，无法载入" }
++                Json.decodeFromString<PublishedDesigns>(source.readUtf8()).projects
++            }
++        }
++    }
++
++    suspend fun designPlayback(credential: MobileAccountCredential, workspace: String, delivery: String): DesignPlayback {
++        val url = "${credential.origin}/gateway/design/player/index.html".toHttpUrl().newBuilder()
++            .addQueryParameter("workspace", workspace)
++            .addQueryParameter("delivery", delivery)
++            .build()
++        return DesignPlayback(url.toString(), "Bearer ${access(credential, credential.endpoint)}")
++    }
++
+     private suspend fun action(origin: String, action: String, payload: JsonObject, refresh: String?): Pair<JsonObject, String?> = withContext(Dispatchers.IO) {
+         val challengeUrl = "$origin$AUTH/challenge".toHttpUrl()
+         val challenge = execute(Request.Builder().url(challengeUrl).build()).use { response ->
+diff --git a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/DesignDeliveriesScreen.kt b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/DesignDeliveriesScreen.kt
+new file mode 100644
+index 0000000..a8001b5
+--- /dev/null
++++ b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/DesignDeliveriesScreen.kt
+@@ -0,0 +1,250 @@
++package com.clarklevis.dsh.android.ui
++
++import android.annotation.SuppressLint
++import android.app.Activity
++import android.webkit.CookieManager
++import android.webkit.RenderProcessGoneDetail
++import android.webkit.WebResourceError
++import android.webkit.WebResourceRequest
++import android.webkit.WebResourceResponse
++import android.webkit.WebView
++import android.webkit.WebViewClient
++import androidx.activity.compose.BackHandler
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.safeDrawingPadding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.material3.Button
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.ListItem
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableIntStateOf
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.platform.LocalView
++import androidx.compose.ui.platform.testTag
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.viewinterop.AndroidView
++import androidx.core.view.ViewCompat
++import androidx.core.view.WindowCompat
++import androidx.core.view.WindowInsetsCompat
++import androidx.core.view.WindowInsetsControllerCompat
++import com.clarklevis.dsh.android.R
++import com.clarklevis.dsh.android.platform.DesignPlayback
++import com.clarklevis.dsh.android.platform.DesignProject
++import com.clarklevis.dsh.android.platform.MobileAccountClient
++import com.clarklevis.dsh.android.platform.MobileAccountCredential
++import kotlinx.coroutines.CancellationException
++
++@Composable
++internal fun DesignDeliveriesScreen(activeAccount: suspend () -> MobileAccountCredential?, onBack: () -> Unit) {
++    var account by remember { mutableStateOf<MobileAccountCredential?>(null) }
++    var projects by remember { mutableStateOf<List<DesignProject>?>(null) }
++    var error by remember { mutableStateOf<String?>(null) }
++    var retry by remember { mutableIntStateOf(0) }
++    var workspace by rememberSaveable { mutableStateOf<String?>(null) }
++    var delivery by rememberSaveable { mutableStateOf<String?>(null) }
++
++    LaunchedEffect(retry) {
++        error = null
++        try {
++            val current = activeAccount()
++            account = current
++            projects = current?.let {
++                MobileAccountClient.publishedDesigns(it).filter { project -> project.deliveries.isNotEmpty() }
++            }.orEmpty()
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (failure: Exception) {
++            error = failure.localizedMessage ?: "无法读取设计定稿"
++        }
++    }
++
++    val selectedWorkspace = workspace
++    val selectedDelivery = delivery
++    val currentAccount = account
++    if (currentAccount != null && selectedWorkspace != null && selectedDelivery != null) {
++        val close = { delivery = null; workspace = null }
++        BackHandler(onBack = close)
++        DesignPlaybackScreen(currentAccount, selectedWorkspace, selectedDelivery, close)
++        return
++    }
++
++    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {
++        Row(
++            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
++            verticalAlignment = Alignment.CenterVertically
++        ) {
++            TopBarCircleButton(R.drawable.ic_back_chevron, "返回", onBack)
++            Spacer(Modifier.weight(1f))
++            Text("设计定稿", style = MaterialTheme.typography.titleLarge)
++            Spacer(Modifier.weight(1f))
++            Spacer(Modifier.size(46.dp))
++        }
++        val available = projects
++        when {
++            error != null -> DesignLoadStatus(error, onRetry = { retry++ })
++            available == null -> DesignLoadStatus()
++            currentAccount == null -> DesignLoadStatus("请先使用 DSH 服务器账号登录")
++            available.isEmpty() -> DesignLoadStatus("暂无设计定稿")
++            else -> LazyColumn {
++                available.forEach { project ->
++                    item(key = "project:${project.id}") {
++                        Text(project.title, Modifier.padding(start = 20.dp, top = 18.dp, bottom = 8.dp),
++                            style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
++                    }
++                    items(project.deliveries, key = { it.id }) { design ->
++                        ListItem(
++                            headlineContent = { Text(design.title) },
++                            supportingContent = { Text("第 ${design.revision} 版") },
++                            modifier = Modifier.clickable {
++                                workspace = project.id
++                                delivery = design.id
++                            }.testTag("design-delivery")
++                        )
++                    }
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun DesignPlaybackScreen(account: MobileAccountCredential, workspace: String, delivery: String, onBack: () -> Unit) {
++    var playback by remember(account, workspace, delivery) { mutableStateOf<DesignPlayback?>(null) }
++    var error by remember(account, workspace, delivery) { mutableStateOf<String?>(null) }
++    var playerOwnsControls by remember(account, workspace, delivery) { mutableStateOf(false) }
++    var retry by remember { mutableIntStateOf(0) }
++    LaunchedEffect(account, workspace, delivery, retry) {
++        error = null
++        playback = null
++        playerOwnsControls = false
++        try {
++            playback = MobileAccountClient.designPlayback(account, workspace, delivery)
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (failure: Exception) {
++            error = failure.localizedMessage ?: "无法打开定稿"
++        }
++    }
++    val request = playback
++    val immersive = playerOwnsControls && error == null && request != null
++    DesignSystemBars(immersive)
++    val insets = if (immersive) Modifier else Modifier.safeDrawingPadding()
++    Box(Modifier.fillMaxSize().background(Color(0xFF1F2023)).then(insets)) {
++        if (error == null && request != null) DesignWebView(
++            request, onClose = onBack, onReady = { playerOwnsControls = it }, onError = { error = it }
++        )
++        else DesignLoadStatus(error, onRetry = { retry++ }, color = Color.White)
++        if (!immersive) {
++            Box(Modifier.align(Alignment.TopStart).padding(10.dp)) {
++                TopBarCircleButton(R.drawable.ic_back_chevron, "返回定稿列表", onBack)
++            }
++        }
++    }
++}
++
++@Composable
++private fun DesignSystemBars(immersive: Boolean) {
++    val view = LocalView.current
++    DisposableEffect(view, immersive) {
++        val window = (view.context as? Activity)?.window
++        if (!immersive || window == null) return@DisposableEffect onDispose {}
++        val controller = WindowCompat.getInsetsController(window, view)
++        val insets = ViewCompat.getRootWindowInsets(view)
++        val statusBars = WindowInsetsCompat.Type.statusBars()
++        val navigationBars = WindowInsetsCompat.Type.navigationBars()
++        val previousBehavior = controller.systemBarsBehavior
++        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
++        controller.hide(statusBars or navigationBars)
++        onDispose {
++            controller.systemBarsBehavior = previousBehavior
++            if (insets?.isVisible(statusBars) != false) controller.show(statusBars)
++            if (insets?.isVisible(navigationBars) != false) controller.show(navigationBars)
++        }
++    }
++}
++
++@SuppressLint("SetJavaScriptEnabled")
++@Composable
++private fun DesignWebView(
++    playback: DesignPlayback,
++    onClose: () -> Unit,
++    onReady: (Boolean) -> Unit,
++    onError: (String) -> Unit
++) {
++    AndroidView(
++        modifier = Modifier.fillMaxSize(),
++        factory = { context ->
++            WebView(context).apply {
++                setBackgroundColor(0xFF1F2023.toInt())
++                settings.javaScriptEnabled = true
++                settings.allowFileAccess = false
++                settings.allowContentAccess = false
++                CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
++                webViewClient = object : WebViewClient() {
++                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
++                        if (request.isForMainFrame && request.hasGesture() && view.url == playback.url &&
++                            request.url.scheme == "dsh-design-player" && request.url.host == "close"
++                        ) onClose()
++                        return true
++                    }
++                    override fun onPageFinished(view: WebView, url: String) {
++                        if (url == playback.url) {
++                            view.evaluateJavascript("Boolean(document.getElementById('exit-player'))") {
++                                onReady(it == "true")
++                            }
++                        }
++                    }
++                    override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
++                        if (request.isForMainFrame) onError("无法打开定稿（${response.statusCode}）")
++                    }
++                    override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
++                        if (request.isForMainFrame) onError("预览连接失败，请重试")
++                    }
++                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
++                        onError("预览已中断，请重试")
++                        return true
++                    }
++                }
++                loadUrl(playback.url, mapOf("Authorization" to playback.authorization))
++            }
++        },
++        onRelease = { it.destroy() }
++    )
++}
++
++@Composable
++private fun DesignLoadStatus(
++    message: String? = null,
++    onRetry: (() -> Unit)? = null,
++    color: Color = MaterialTheme.colorScheme.onBackground
++) {
++    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
++        if (message == null) CircularProgressIndicator()
++        else Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            Text(message, color = color)
++            if (onRetry != null) Button(onClick = onRetry) { Text("重试") }
++        }
++    }
++}
+diff --git a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/DshProductApp.kt b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/DshProductApp.kt
+index 3396e91..7b38999 100644
+--- a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/DshProductApp.kt
++++ b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/DshProductApp.kt
+@@ -89,6 +89,7 @@ import androidx.core.view.WindowCompat
+ import com.clarklevis.dsh.android.AndroidNotificationSessionRoute
+ import com.clarklevis.dsh.android.AndroidSharedStateHolder
+ import com.clarklevis.dsh.android.R
++import com.clarklevis.dsh.android.platform.MobileAccountCredential
+ import com.clarklevis.dsh.shared.domain.SessionSummary
+ import com.clarklevis.dsh.shared.gateway.GatewayConnectionState
+ import com.clarklevis.dsh.shared.gateway.GatewayRuntimeState
+@@ -104,10 +105,12 @@ private const val ROUTE_SETTINGS_AGENT_PRESETS = "settings/agent-presets"
+ private const val ROUTE_SETTINGS_DEFAULT_MODEL = "settings/default-model"
+ private const val ROUTE_PLUGINS = "plugins"
+ private const val ROUTE_SCHEDULED_TASKS = "scheduled-tasks"
++private const val ROUTE_DESIGN_DELIVERIES = "design-deliveries"
+ 
+ @Composable
+ internal fun DshProductApp(
+     stateHolder: AndroidSharedStateHolder,
++    activeAccount: suspend () -> MobileAccountCredential?,
+     onPickImage: () -> Unit,
+     notificationRoute: AndroidNotificationSessionRoute?,
+     onNotificationRouteOpened: (AndroidNotificationSessionRoute) -> Unit
+@@ -168,7 +171,8 @@ internal fun DshProductApp(
+                 },
+                 onSettings = { navController.navigate(ROUTE_SETTINGS) },
+                 onPlugins = { navController.navigate(ROUTE_PLUGINS) },
+-                onScheduledTasks = { navController.navigate(ROUTE_SCHEDULED_TASKS) }
++                onScheduledTasks = { navController.navigate(ROUTE_SCHEDULED_TASKS) },
++                onDesignDeliveries = { navController.navigate(ROUTE_DESIGN_DELIVERIES) }
+             )
+         }
+         composable(ROUTE_CONVERSATION) {
+@@ -191,6 +195,9 @@ internal fun DshProductApp(
+         composable(ROUTE_PLUGINS) {
+             DrawerDestinationScreen("插件", "插件功能尚未接入", navController::popBackStack)
+         }
++        composable(ROUTE_DESIGN_DELIVERIES) {
++            DesignDeliveriesScreen(activeAccount, navController::popBackStack)
++        }
+         composable(ROUTE_SCHEDULED_TASKS) {
+             ScheduledTasksScreen(
+                 stateHolder = stateHolder,
+@@ -256,7 +263,8 @@ private fun WorkspaceScreen(
+     onNewSession: () -> Unit,
+     onSettings: () -> Unit,
+     onPlugins: () -> Unit,
+-    onScheduledTasks: () -> Unit
++    onScheduledTasks: () -> Unit,
++    onDesignDeliveries: () -> Unit
+ ) {
+     var searchQuery by rememberSaveable { mutableStateOf("") }
+     var showManualPairing by rememberSaveable { mutableStateOf(false) }
+@@ -295,7 +303,11 @@ private fun WorkspaceScreen(
+         }
+     }
+ 
+-    WorkspaceDrawer(onPlugins = onPlugins, onScheduledTasks = onScheduledTasks) { openDrawer, canScrollVertically ->
++    WorkspaceDrawer(
++        onPlugins = onPlugins,
++        onScheduledTasks = onScheduledTasks,
++        onDesignDeliveries = onDesignDeliveries
++    ) { openDrawer, canScrollVertically ->
+         DshLiquidGlassHost(
+             modifier = Modifier.fillMaxSize().testTag("workspace-screen"),
+             background = { backdropModifier -> HarnessAnimatedBackground(backdropModifier) }
+diff --git a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/WorkspaceDrawer.kt b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/WorkspaceDrawer.kt
+index fbe7eb2..28b3732 100644
+--- a/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/WorkspaceDrawer.kt
++++ b/androidApp/src/main/kotlin/com/clarklevis/dsh/android/ui/WorkspaceDrawer.kt
+@@ -64,6 +64,7 @@ private val drawerPageShape = RoundedCornerShape(48.dp)
+ internal fun WorkspaceDrawer(
+     onPlugins: () -> Unit,
+     onScheduledTasks: () -> Unit,
++    onDesignDeliveries: () -> Unit,
+     content: @Composable (openDrawer: () -> Unit, canScrollVertically: Boolean) -> Unit
+ ) {
+     BoxWithConstraints(Modifier.fillMaxSize()) {
+@@ -126,6 +127,9 @@ internal fun WorkspaceDrawer(
+                 DrawerItem("定时任务", R.drawable.ic_drawer_schedule, "drawer-scheduled-tasks") {
+                     onScheduledTasks()
+                 }
++                DrawerItem("设计定稿", R.drawable.ic_drawer_design, "drawer-design-deliveries") {
++                    onDesignDeliveries()
++                }
+             }
+ 
+             Box(
+diff --git a/androidApp/src/main/res/drawable/ic_drawer_design.xml b/androidApp/src/main/res/drawable/ic_drawer_design.xml
+new file mode 100644
+index 0000000..b6c64a7
+--- /dev/null
++++ b/androidApp/src/main/res/drawable/ic_drawer_design.xml
+@@ -0,0 +1,12 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:strokeColor="#FF000000"
++        android:strokeWidth="1.7"
++        android:strokeLineCap="round"
++        android:strokeLineJoin="round"
++        android:pathData="M3.5,5.5H20.5V18.5H3.5Z M10,9L15,12L10,15Z" />
++</vector>

@@ -12,7 +12,11 @@
 
 填写目标页面和交互说明，点击 **定稿并开发**。网关核对绑定，将 `.op` 定稿写入对应前端工作区，并通过 DSH 任务看板启动开发会话。同一版定稿会复用原任务。
 
-交付记录中的 **手机预览** 和 **复制预览链接** 指向当时定稿的版本。手机浏览器打开链接并登录 DSH 后，有项目访问权限的成员可以换页、缩放和拖动画布。验证开发后的页面交互时，使用业务项目运行后提供的预览地址。
+## 在 DSH App 查看定稿
+
+用 DSH 服务器账号登录 Android 或 iOS App，从侧栏打开 **设计定稿**，按项目选择版本。有原型连线的定稿会从设计指定的起始页全屏播放。点击设计中的按钮或热点跳转、返回或切换页面。滚动遵循画板设置，固定的导航栏会留在原位。
+
+点一下空白区域可以短暂显示热点。长按画布打开菜单，可以切换流程、重新播放、调整画板缩放、关闭热点提示或退出。无原型连线的旧定稿仍可以左右滑动浏览画板。交付记录里的 **复制预览链接** 可以在手机浏览器中查看设计稿。验证开发后的页面交互时，使用业务项目运行后提供的预览地址。
 
 ## 导入 Figma
 
@@ -20,7 +24,7 @@
 2. 在 DSH **设计工作台**选择前端工作区，点击 **导入 Figma**，选择该文件。
 3. 在 OpenPencil 画布检查并编辑新草稿。填写目标页面和交互说明，点击 **定稿并开发**启动任务。
 
-导入入口接收本地 `.fig` 文件。浏览器完成转换后，DSH 将可编辑的 `.op` 草稿保存到所选项目名下。转换后的设计稿上限为 16 MiB。大型设计可以拆成多个 `.fig` 文件导入。
+导入入口接收本地 `.fig` 文件。浏览器完成转换后，DSH 将可编辑的 `.op` 草稿保存到所选项目名下。原型转换支持流程起始页、点击跳转、返回、滚动方向、固定和吸顶图层。Figma 浮层、条件交互和自定义转场尚待支持。转换后的设计稿上限为 16 MiB。
 
 ## 接入 DSH
 
@@ -47,8 +51,17 @@ npm ci
 DSH_OPENPENCIL_WEB_BUNDLE="$OPENPENCIL_BUNDLE" npm pack
 ```
 
-构建产物为 `dsh-passwords-2.7.8-dsh.20261119.3.tgz`。包内包含原生网页编辑器、Figma 转换模块，以及固定版本的 OpenPencil 手机查看器。
+构建产物为 `dsh-passwords-2.7.8-dsh.20261119.5.tgz`。包内包含 OpenPencil 网页编辑器、Figma 转换模块及定稿播放器。
 
 使用该包更新账号网关和 Harness Web Profile 中的 `dsh-passwords`。在 Web Profile 服务环境中将 `DSH_OPENPENCIL_EDITOR_BIN` 指向同一提交构建的 `op-host-web-server` 绝对路径，启用 `MCP_TENANT_TASK_BOARD=true`，并将 `MCP_MANAGED_WORKSPACE_ROOT` 指向前端工作区所在的数据盘。在 30 号机上，构建、候选包和验证目录使用 `/srv/dsh-data`。
 
-美工账号需要所选前端工作区的访问和写入权限。使用 HTTPS 访问编辑器，手机通过同一个 DSH 网关查看定稿。
+美工账号需要所选前端工作区的访问和写入权限。使用 HTTPS 访问编辑器，并在账号网关启用 `MCP_MOBILE_AUTH_ENABLED=true` 以供 App 登录。定稿播放器使用同一项目的读取权限。
+
+## 构建 DSH App
+
+客户端补丁以 `dsh-mobile` 的 `f13c570efed021562a928eb6e489e8ca76a29d34` 为基线。在 `dsh-mobile` 检出目录执行以下命令，然后按该仓库的 Android 和 iOS 构建说明生成安装包。
+
+```bash
+MOBILE_PATCH="$OPENPENCIL_ROOT/deploy/dsh-design-studio/mobile/0001-dsh-design-deliveries.patch"
+git apply --check "$MOBILE_PATCH" && git apply "$MOBILE_PATCH"
+```
